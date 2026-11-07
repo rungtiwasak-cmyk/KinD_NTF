@@ -1,8 +1,34 @@
 import { useEffect, useMemo, useState } from "react";
-import { BackHandler, Platform, StyleSheet, View } from "react-native";
+import {
+  BackHandler,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  View,
+} from "react-native";
 import BottomTabs from "../components/BottomTabs";
-import { findCreator } from "../data/creators";
-import { createPostInDB, fetchPosts } from "../lib/api";
+import {
+  addCommentInDB,
+  clearAvatar,
+  createCollectionInDB,
+  createPostInDB,
+  deletePostInDB,
+  fetchCollections,
+  fetchCreators,
+  fetchFavorites,
+  fetchFollows,
+  fetchNotifications,
+  fetchPosts,
+  followUser,
+  likePost,
+  markAllNotificationsRead,
+  markNotificationRead,
+  removeFavorite,
+  saveFavorite,
+  unfollowUser,
+  unlikePost,
+  uploadAvatar,
+} from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { colors } from "../theme";
 
@@ -29,6 +55,7 @@ const INITIAL_PROFILE = {
   name: "รุ่งทิวา",
   email: "rungtiwa@example.com",
   avatar: "👩",
+  avatarUrl: null, // รูปโปรไฟล์ที่ผู้ใช้อัปโหลดเอง (ถ้าไม่มีใช้อีโมจิ)
   group: "นักศึกษาหอพัก",
   calorieGoal: 2000,
   healthGoal: null,
@@ -52,47 +79,19 @@ const SAMPLE_SCANS = [
   },
 ];
 
-const SAMPLE_NOTIFICATIONS = [
-  {
-    id: 1,
-    type: "menu",
-    text: "แซลมอนอบผัก เมนูใหม่ที่เหมาะกับเป้าหมายของคุณ",
-    at: Date.now() - 12 * 60000,
-    read: false,
-    postId: 2,
-  },
-  {
-    id: 2,
-    type: "follow",
-    text: "FitFood Pim เริ่มติดตามคุณ",
-    at: Date.now() - 2 * 3600000,
-    read: false,
-  },
-  {
-    id: 3,
-    type: "reply",
-    text: "หนุ่มกะเพรา ตอบกลับความคิดเห็นของคุณในโพสต์อกไก่ย่างซอสส้ม",
-    at: Date.now() - 5 * 3600000,
-    read: true,
-    postId: 1,
-  },
-  {
-    id: 4,
-    type: "system",
-    text: "วันนี้คุณกินไปแล้ว 70% ของเป้าหมายแคลอรี่",
-    at: Date.now() - 1 * DAY,
-    read: true,
-  },
-];
-
 export default function MainScreen({ onLogout }) {
   const [tab, setTab] = useState("home");
   // stack ของหน้าที่เปิดทับแท็บ เช่น แจ้งเตือน สแกน รายละเอียดโพสต์
   const [stack, setStack] = useState([]);
   const [posts, setPosts] = useState([]);
   const [profile, setProfile] = useState(INITIAL_PROFILE);
-  const [notifications, setNotifications] = useState(SAMPLE_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState([]);
   const [scanHistory, setScanHistory] = useState(SAMPLE_SCANS);
+  const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
+  const [creators, setCreators] = useState([]); // ผู้ใช้ทั้งหมดจาก Supabase
+  const [follows, setFollows] = useState([]); // [{ follower_id, following_id }]
+  const [collections, setCollections] = useState([]); // กลุ่ม Favorite
+  const [favs, setFavs] = useState({}); // { รหัสโพสต์: [รหัสกลุ่ม, ...] }
 
   const top = stack.length > 0 ? stack[stack.length - 1] : null;
   const push = (name, params = {}) => setStack((s) => [...s, { name, params }]);
@@ -118,6 +117,38 @@ export default function MainScreen({ onLogout }) {
   useEffect(() => {
     let cancelled = false;
 
+    // โหลดข้อมูลเสริมจาก Supabase (แต่ละอย่างพังแยกกัน ไม่ทำให้แอปทั้งหมดพัง)
+    const loadExtras = async (uid) => {
+      const [cr, fo, fa, co] = await Promise.allSettled([
+        fetchCreators(),
+        fetchFollows(),
+        fetchFavorites(uid),
+        fetchCollections(uid),
+      ]);
+      if (cancelled) return;
+      if (cr.status === "fulfilled") setCreators(cr.value);
+      else console.log("โหลดรายชื่อ creator ไม่สำเร็จ:", cr.reason?.message);
+      if (fo.status === "fulfilled") setFollows(fo.value);
+      else console.log("โหลดการติดตามไม่สำเร็จ:", fo.reason?.message);
+      if (fa.status === "fulfilled") setFavs(fa.value);
+      else console.log("โหลด Favorite ไม่สำเร็จ:", fa.reason?.message);
+      if (co.status === "fulfilled") {
+        if (co.value.length > 0) setCollections(co.value);
+        else {
+          // ผู้ใช้ใหม่: สร้างกลุ่มเริ่มต้นให้ 2 กลุ่ม
+          try {
+            const defaults = [];
+            for (const n of ["อยากลองทำ", "โปรตีนสูง"]) {
+              defaults.push(await createCollectionInDB(uid, n));
+            }
+            if (!cancelled) setCollections(defaults);
+          } catch (e) {
+            console.log("สร้างกลุ่มเริ่มต้นไม่สำเร็จ:", e?.message);
+          }
+        }
+      } else console.log("โหลดกลุ่ม Favorite ไม่สำเร็จ:", co.reason?.message);
+    };
+
     const loadData = async () => {
       try {
         // 1. ดึงข้อมูลผู้ใช้ที่ล็อกอินอยู่ปัจจุบันจาก Auth
@@ -126,6 +157,9 @@ export default function MainScreen({ onLogout }) {
         } = await supabase.auth.getUser();
 
         if (user) {
+          setUserId(user.id);
+          loadExtras(user.id); // ติดตาม / Favorite / รายชื่อ creator (ไม่รอ ไม่ให้ขวางการโหลดโพสต์)
+
           // 2. ดึงข้อมูลโปรไฟล์จริงจากตาราง users โดยใช้ user_id
           const { data: profileData, error: profileError } = await supabase
             .from("users")
@@ -139,6 +173,7 @@ export default function MainScreen({ onLogout }) {
               ...prev,
               name: profileData.username || prev.name,
               email: user.email,
+              avatarUrl: profileData.avatar_url || null,
               group: profileData.user_groups?.[0] || prev.group,
               healthGoal: profileData.usage_goals?.[0] || prev.healthGoal,
               allergies: profileData.dietary_restrictions || prev.allergies,
@@ -187,52 +222,119 @@ export default function MainScreen({ onLogout }) {
 
       alert("โพสต์สำเร็จ!");
     } catch (error) {
-      console.log("สร้างโพสต์ไม่สำเร็จ:", error.message);
-      alert("เกิดข้อผิดพลาดในการโพสต์ โปรดลองอีกครั้ง");
+      console.log("สร้างโพสต์ไม่สำเร็จ:", error);
+      alert(
+        "เกิดข้อผิดพลาดในการโพสต์: " +
+          (error?.message || "โปรดลองอีกครั้ง"),
+      );
     }
   };
-  const deletePost = (id) =>
-    setPosts((prev) => prev.filter((p) => p.id !== id));
+  // ลบโพสต์จริงใน Supabase ก่อน สำเร็จแล้วค่อยเอาออกจากหน้าจอ
+  const deletePost = async (id) => {
+    const target = posts.find((p) => p.id === id);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("กรุณาล็อกอินก่อน");
+      await deletePostInDB(id, user.id, target?.media?.uri);
+      setPosts((prev) => prev.filter((p) => p.id !== id));
+    } catch (error) {
+      console.log("ลบโพสต์ไม่สำเร็จ:", error);
+      alert("ลบโพสต์ไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
+    }
+  };
 
-  // ---------- ติดตาม Creator ----------
-  const [following, setFollowing] = useState({}); // { ชื่อ creator: true }
-  const toggleFollow = (name) =>
-    setFollowing((prev) => {
-      const next = { ...prev };
-      if (next[name]) delete next[name];
-      else next[name] = true;
-      return next;
+  // ---------- ติดตาม Creator (บันทึกลง Supabase ตาราง follows) ----------
+  const following = useMemo(() => {
+    const m = {};
+    follows.forEach((f) => {
+      if (f.follower_id === userId) m[f.following_id] = true;
     });
-  const openCreator = (name) => {
+    return m;
+  }, [follows, userId]);
+  const followerCount = (id) =>
+    follows.filter((f) => f.following_id === id).length;
+
+  const toggleFollow = async (targetId) => {
+    if (!userId || !targetId || targetId === userId) return;
+    const was = !!following[targetId];
+    const row = { follower_id: userId, following_id: targetId };
+    const apply = (on) =>
+      setFollows((prev) =>
+        on
+          ? [...prev, row]
+          : prev.filter(
+              (f) =>
+                !(f.follower_id === userId && f.following_id === targetId),
+            ),
+      );
+    apply(!was); // อัปเดตหน้าจอทันที
+    try {
+      if (was) await unfollowUser(userId, targetId);
+      else await followUser(userId, targetId);
+    } catch (error) {
+      console.log("ติดตามไม่สำเร็จ:", error);
+      apply(was); // ย้อนกลับ
+      alert("ติดตามไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
+    }
+  };
+  const openCreator = (id) => {
+    if (!id) return;
     // ถ้าอยู่หน้าของ creator คนนี้อยู่แล้ว ไม่ต้องเปิดซ้ำ
-    if (top && top.name === "creator" && top.params.name === name) return;
-    push("creator", { name });
+    if (top && top.name === "creator" && top.params.id === id) return;
+    push("creator", { id });
   };
   const openPost = (id) => push("postDetail", { postId: id });
 
-  const toggleLike = (id) =>
+  // ---------- ไลก์ (บันทึกลง Supabase ตาราง likes) ----------
+  const setLiked = (id, liked) =>
     setPosts((prev) =>
       prev.map((p) =>
-        p.id === id
-          ? { ...p, liked: !p.liked, likes: p.likes + (p.liked ? -1 : 1) }
+        p.id === id && p.liked !== liked
+          ? { ...p, liked, likes: p.likes + (liked ? 1 : -1) }
           : p,
       ),
     );
+  const toggleLike = async (id) => {
+    const target = posts.find((p) => p.id === id);
+    if (!target || !userId) return;
+    const willLike = !target.liked;
+    setLiked(id, willLike);
+    try {
+      if (willLike) await likePost(id, userId);
+      else await unlikePost(id, userId);
+    } catch (error) {
+      console.log("ไลก์ไม่สำเร็จ:", error);
+      setLiked(id, !willLike);
+      alert("กดไลก์ไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
+    }
+  };
 
-  const addComment = (id, text) =>
-    setPosts((prev) =>
-      prev.map((p) =>
-        p.id === id
-          ? {
-              ...p,
-              comments: [
-                ...p.comments,
-                { id: Date.now(), user: profile.name, mine: true, text },
-              ],
-            }
-          : p,
-      ),
-    );
+  // ---------- คอมเมนต์ (บันทึกลง Supabase ตาราง comments) ----------
+  const addComment = async (id, text) => {
+    if (!userId) return;
+    const tempId = "tmp-" + Date.now();
+    const patchComments = (fn) =>
+      setPosts((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, comments: fn(p.comments) } : p)),
+      );
+    // แสดงทันที แล้วค่อยบันทึก
+    patchComments((cs) => [
+      ...cs,
+      { id: tempId, user: profile.name, mine: true, text },
+    ]);
+    try {
+      const realId = await addCommentInDB(id, userId, text);
+      patchComments((cs) =>
+        cs.map((c) => (c.id === tempId ? { ...c, id: realId } : c)),
+      );
+    } catch (error) {
+      console.log("ส่งคอมเมนต์ไม่สำเร็จ:", error);
+      patchComments((cs) => cs.filter((c) => c.id !== tempId));
+      alert("ส่งคอมเมนต์ไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
+    }
+  };
 
   // ชื่อ/รูปของเราอัปเดตตามโปรไฟล์ทุกที่ (โพสต์และคอมเมนต์ของเรา)
   const viewPosts = useMemo(
@@ -242,42 +344,80 @@ export default function MainScreen({ onLogout }) {
           c.mine ? { ...c, user: profile.name } : c,
         );
         return p.mine
-          ? { ...p, author: profile.name, emoji: profile.avatar, comments }
+          ? {
+              ...p,
+              author: profile.name,
+              emoji: profile.avatar,
+              avatarUrl: profile.avatarUrl,
+              comments,
+            }
           : { ...p, comments };
       }),
     [posts, profile],
   );
   const myPosts = viewPosts.filter((p) => p.mine);
 
-  // ---------- Favorite ----------
-  // favs = { รหัสโพสต์: [รหัสกลุ่ม, ...] } ถ้ามีรหัสโพสต์ แปลว่าบันทึกอยู่
-  const [collections, setCollections] = useState([
-    { id: "c1", name: "อยากลองทำ" },
-    { id: "c2", name: "โปรตีนสูง" },
-  ]);
-  const [favs, setFavs] = useState({});
+  // รายชื่อ creator สำหรับหน้าค้นหา (ไม่รวมตัวเอง) พร้อมจำนวนผู้ติดตาม/โพสต์
+  const creatorList = creators
+    .filter((c) => c.id !== userId)
+    .map((c) => ({
+      ...c,
+      followers: followerCount(c.id),
+      postCount: posts.filter((p) => p.creatorId === c.id).length,
+    }))
+    .sort((a, b) => b.followers - a.followers || b.postCount - a.postCount);
 
-  const toggleFav = (postId) =>
+  // ---------- Favorite (บันทึกลง Supabase ตาราง favorites / collections) ----------
+  // favs = { รหัสโพสต์: [รหัสกลุ่ม, ...] } ถ้ามีรหัสโพสต์ แปลว่าบันทึกอยู่
+  const toggleFav = async (postId) => {
+    if (!userId) return;
+    const was = favs[postId] !== undefined;
+    const old = favs[postId];
     setFavs((prev) => {
       const next = { ...prev };
-      if (next[postId] !== undefined) delete next[postId];
+      if (was) delete next[postId];
       else next[postId] = [];
       return next;
     });
+    try {
+      if (was) await removeFavorite(userId, postId);
+      else await saveFavorite(userId, postId, []);
+    } catch (error) {
+      console.log("บันทึก Favorite ไม่สำเร็จ:", error);
+      setFavs((prev) => {
+        const next = { ...prev };
+        if (was) next[postId] = old;
+        else delete next[postId];
+        return next;
+      });
+      alert("บันทึก Favorite ไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
+    }
+  };
 
-  const toggleInCollection = (postId, cid) =>
-    setFavs((prev) => {
-      const cur = prev[postId] || [];
-      return {
-        ...prev,
-        [postId]: cur.includes(cid)
-          ? cur.filter((x) => x !== cid)
-          : [...cur, cid],
-      };
-    });
+  const toggleInCollection = async (postId, cid) => {
+    if (!userId) return;
+    const cur = favs[postId] || [];
+    const next = cur.includes(cid) ? cur.filter((x) => x !== cid) : [...cur, cid];
+    setFavs((prev) => ({ ...prev, [postId]: next }));
+    try {
+      await saveFavorite(userId, postId, next);
+    } catch (error) {
+      console.log("จัดกลุ่ม Favorite ไม่สำเร็จ:", error);
+      setFavs((prev) => ({ ...prev, [postId]: cur }));
+      alert("จัดกลุ่มไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
+    }
+  };
 
-  const createCollection = (name) =>
-    setCollections((prev) => [...prev, { id: "c" + Date.now(), name }]);
+  const createCollection = async (name) => {
+    if (!userId) return;
+    try {
+      const c = await createCollectionInDB(userId, name);
+      setCollections((prev) => [...prev, c]);
+    } catch (error) {
+      console.log("สร้างกลุ่มไม่สำเร็จ:", error);
+      alert("สร้างกลุ่มไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
+    }
+  };
 
   const favApi = {
     favs,
@@ -305,17 +445,66 @@ export default function MainScreen({ onLogout }) {
 
   // ---------- แจ้งเตือน ----------
   const unreadCount = notifications.filter((n) => !n.read).length;
-  const readAll = () =>
+  const readAll = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    if (userId)
+      markAllNotificationsRead(userId).catch((e) =>
+        console.log("อ่านทั้งหมดไม่สำเร็จ:", e?.message),
+      );
+  };
   const openNotification = (n) => {
     setNotifications((prev) =>
       prev.map((x) => (x.id === n.id ? { ...x, read: true } : x)),
     );
+    if (!n.read)
+      markNotificationRead(n.id).catch((e) =>
+        console.log("อ่านแจ้งเตือนไม่สำเร็จ:", e?.message),
+      );
     if (n.postId) push("postDetail", { postId: n.postId });
   };
 
+  // โหลดแจ้งเตือนจริงจาก Supabase: ตอนเข้าแอป, ทุก 30 วินาที และตอนเปิดหน้าแจ้งเตือน
+  const refreshNotifications = async () => {
+    if (!userId) return;
+    try {
+      setNotifications(await fetchNotifications(userId));
+    } catch (e) {
+      console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message);
+    }
+  };
+  useEffect(() => {
+    if (!userId) return undefined;
+    refreshNotifications();
+    const timer = setInterval(refreshNotifications, 30000);
+    return () => clearInterval(timer);
+  }, [userId]);
+  useEffect(() => {
+    if (top && top.name === "notifications") refreshNotifications();
+  }, [top && top.name]);
+
   // ---------- โปรไฟล์ ----------
   const saveProfile = (patch) => setProfile((prev) => ({ ...prev, ...patch }));
+
+  // บันทึกหน้าแก้ไขโปรไฟล์ (รวมอัปโหลดรูปโปรไฟล์ที่เลือกจากเครื่อง)
+  // avatarPick = { uri, mimeType, base64 } ถ้าเลือกรูปใหม่ / "clear" ถ้ากลับไปใช้อีโมจิ / null ถ้าไม่เปลี่ยน
+  const saveEditedProfile = async ({ avatarPick, ...patch }) => {
+    if (avatarPick) {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("กรุณาล็อกอินก่อน");
+      if (avatarPick === "clear") {
+        await clearAvatar(user.id);
+        patch.avatarUrl = null;
+      } else {
+        patch.avatarUrl = await uploadAvatar(
+          { ...avatarPick, type: "image" },
+          user.id,
+        );
+      }
+    }
+    saveProfile(patch);
+  };
 
   // ---------- หน้าที่เปิดทับแท็บ ----------
   const renderOverlay = () => {
@@ -351,14 +540,23 @@ export default function MainScreen({ onLogout }) {
             onBack={pop}
           />
         );
-      case "creator":
+      case "creator": {
+        const cid = top.params.id;
+        const fromList = creators.find((c) => c.id === cid);
+        const fromPost = viewPosts.find((p) => p.creatorId === cid);
+        const base =
+          fromList ||
+          (fromPost
+            ? { id: cid, name: fromPost.author, avatarUrl: fromPost.avatarUrl }
+            : null);
+        const creator = base
+          ? { ...base, followers: followerCount(cid), emoji: "🧑‍🍳" }
+          : null;
         return (
           <CreatorScreen
-            creator={findCreator(top.params.name)}
-            posts={viewPosts.filter(
-              (p) => p.author === top.params.name && !p.mine,
-            )}
-            isFollowing={!!following[top.params.name]}
+            creator={creator}
+            posts={viewPosts.filter((p) => p.creatorId === cid && !p.mine)}
+            isFollowing={!!following[cid]}
             onToggleFollow={toggleFollow}
             favApi={favApi}
             onToggleLike={toggleLike}
@@ -366,6 +564,7 @@ export default function MainScreen({ onLogout }) {
             onBack={pop}
           />
         );
+      }
       case "favorites":
       case "liked":
         return (
@@ -413,7 +612,7 @@ export default function MainScreen({ onLogout }) {
         return (
           <EditProfileScreen
             profile={profile}
-            onSave={saveProfile}
+            onSave={saveEditedProfile}
             onBack={pop}
           />
         );
@@ -426,7 +625,9 @@ export default function MainScreen({ onLogout }) {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <View style={{ flex: 1 }}>
+      {/* ดันเนื้อหาขึ้นเหนือแป้นพิมพ์ จะได้เห็นสิ่งที่กำลังพิมพ์ (ทุกหน้า) */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <View style={{ flex: 1 }}>
         {tab === "home" && (
           <HomeScreen
             posts={viewPosts}
@@ -448,6 +649,7 @@ export default function MainScreen({ onLogout }) {
         {tab === "search" && (
           <SearchScreen
             posts={viewPosts}
+            creators={creatorList}
             following={following}
             onToggleFollow={toggleFollow}
             onToggleLike={toggleLike}
@@ -483,7 +685,8 @@ export default function MainScreen({ onLogout }) {
             {renderOverlay()}
           </View>
         )}
-      </View>
+        </View>
+      </KeyboardAvoidingView>
       <BottomTabs active={tab} onChange={changeTab} />
     </View>
   );

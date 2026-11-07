@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../theme';
 
 const TABS = [
@@ -11,8 +12,10 @@ const TABS = [
 ];
 
 export default function BottomTabs({ active, onChange }) {
+  // เว้นที่ด้านล่างให้แถบปุ่มระบบของมือถือ (ปุ่ม Back/Home/Recent หรือแถบท่าทาง) ไม่ให้ทับเมนู
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.tabBar}>
+    <View style={[styles.tabBar, { paddingBottom: 8 + insets.bottom }]}>
       {TABS.map((t) => {
         const isActive = t.key === active;
         const color = isActive ? colors.primary : colors.muted;

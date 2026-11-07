@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, Modal, Scro
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import { nutriText } from '../utils';
+import Avatar from './Avatar';
 
 // หน้าต่างจัดกลุ่ม Favorite
 function CollectionSheet({ visible, onClose, postId, favApi }) {
@@ -66,7 +67,7 @@ function CollectionSheet({ visible, onClose, postId, favApi }) {
 }
 
 export default function PostCard({ post, onToggleLike, onAddComment, favApi, defaultOpen = false, onOpenCreator }) {
-  const canOpenCreator = !!onOpenCreator && !post.mine;
+  const canOpenCreator = !!onOpenCreator && !post.mine && !!post.creatorId;
   const [showDetail, setShowDetail] = useState(defaultOpen);
   const [showComments, setShowComments] = useState(false);
   const [showSheet, setShowSheet] = useState(false);
@@ -86,10 +87,10 @@ export default function PostCard({ post, onToggleLike, onAddComment, favApi, def
         style={styles.cardHead}
         activeOpacity={canOpenCreator ? 0.7 : 1}
         disabled={!canOpenCreator}
-        onPress={() => onOpenCreator(post.author)}
+        onPress={() => onOpenCreator(post.creatorId)}
       >
         <View style={styles.avatar}>
-          <Text style={{ fontSize: 22 }}>{post.emoji}</Text>
+          <Avatar emoji={post.emoji} uri={post.avatarUrl} fontSize={22} />
         </View>
         <Text style={styles.author}>{post.author}</Text>
         {canOpenCreator ? <Ionicons name="chevron-forward" size={16} color={colors.muted} style={{ marginRight: 8 }} /> : null}
@@ -189,7 +190,7 @@ export default function PostCard({ post, onToggleLike, onAddComment, favApi, def
 const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', borderRadius: 20, padding: 12, marginBottom: 16 },
   cardHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FFE0B2', alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FFE0B2', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   author: { flex: 1, marginLeft: 10, fontWeight: 'bold', color: colors.text },
   catTag: { backgroundColor: '#FFE0B2', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 3 },
   catTagText: { color: colors.primary, fontSize: 11, fontWeight: 'bold' },

@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
-import { CREATORS } from '../data/creators';
+import Avatar from '../components/Avatar';
 import { nutriText } from '../utils';
 
 // ---------- ข้อมูลจำลอง ----------
@@ -26,7 +26,7 @@ const CATEGORIES = [
   'เปรี้ยว',
   'หวาน',
 ];
-const REGIONS = ['ภาคเหนือ', 'ภาคอีสาน', 'ภาคกลาง', 'ภาคใต้'];
+const REGIONS = ['ภาคเหนือ', 'ภาคอีสาน', 'ภาคกลาง', 'ภาคใต้', 'อาหารต่างประเทศ'];
 
 // ---------- ชิปตัวกรอง ----------
 function Chip({ label, selected, onPress }) {
@@ -46,18 +46,18 @@ function CreatorCard({ item, isFollowing, onToggleFollow, onPress }) {
   return (
     <TouchableOpacity style={styles.creatorCard} activeOpacity={0.85} onPress={onPress}>
       <View style={styles.creatorAvatar}>
-        <Text style={{ fontSize: 30 }}>{item.emoji}</Text>
+        <Avatar emoji="🧑‍🍳" uri={item.avatarUrl} fontSize={30} />
       </View>
       <Text style={styles.creatorName} numberOfLines={1}>
         {item.name}
       </Text>
       <Text style={styles.creatorFocus} numberOfLines={1}>
-        {item.focus}
+        {item.postCount} โพสต์
       </Text>
       <Text style={styles.creatorFollowers}>{item.followers} ผู้ติดตาม</Text>
       <TouchableOpacity
         style={[styles.followBtn, isFollowing && styles.followBtnOn]}
-        onPress={() => onToggleFollow(item.name)}>
+        onPress={() => onToggleFollow(item.id)}>
         <Text style={[styles.followText, isFollowing && { color: '#fff' }]}>
           {isFollowing ? 'Following' : 'Follow'}
         </Text>
@@ -104,6 +104,7 @@ function MenuRow({ item, rank, onPress, onToggleLike }) {
 // ---------- หน้าค้นหา ----------
 export default function SearchScreen({
   posts = [],
+  creators: allCreators = [],
   following = {},
   onToggleFollow,
   onToggleLike,
@@ -116,12 +117,8 @@ export default function SearchScreen({
 
   const q = query.trim().toLowerCase();
 
-  const creators = CREATORS.filter(
-    (c) =>
-      !q ||
-      c.name.toLowerCase().includes(q) ||
-      c.handle.toLowerCase().includes(q) ||
-      c.focus.includes(q)
+  const creators = allCreators.filter(
+    (c) => !q || c.name.toLowerCase().includes(q)
   );
 
   // หมวดของโพสต์: ใช้ cats ถ้ามี ไม่งั้นใช้หมวดที่ผู้โพสต์เลือก
@@ -141,7 +138,7 @@ export default function SearchScreen({
   let title = '🔥 เมนูยอดนิยมวันนี้';
   if (cat && region) title = `🏆 10 อันดับเมนู${cat} (${region})`;
   else if (cat) title = `🏆 10 อันดับเมนู${cat}ประจำวัน`;
-  else if (region) title = `🏆 10 อันดับอาหาร${region}`;
+  else if (region) title = region.startsWith('อาหาร') ? `🏆 10 อันดับ${region}` : `🏆 10 อันดับอาหาร${region}`;
   if (q) title = `ผลการค้นหาเมนู "${query.trim()}"`;
 
   const clearAll = () => {
@@ -189,9 +186,9 @@ export default function SearchScreen({
               <CreatorCard
                 key={c.id}
                 item={c}
-                isFollowing={!!following[c.name]}
+                isFollowing={!!following[c.id]}
                 onToggleFollow={onToggleFollow}
-                onPress={() => onOpenCreator(c.name)}
+                onPress={() => onOpenCreator(c.id)}
               />
             ))}
           </ScrollView>
@@ -323,6 +320,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 8,
+    overflow: 'hidden',
   },
   creatorName: { fontWeight: 'bold', color: colors.text, fontSize: 13 },
   creatorFocus: { color: colors.muted, fontSize: 11, marginTop: 2 },

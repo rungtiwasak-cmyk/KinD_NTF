@@ -9,6 +9,7 @@ const ICONS = {
   menu: 'restaurant-outline',
   follow: 'person-add-outline',
   reply: 'chatbubble-outline',
+  comment: 'chatbubble-outline',
   like: 'heart-outline',
   system: 'flame-outline',
 };

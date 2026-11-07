@@ -1,0 +1,713 @@
+diff --git a/components/PostCard.js b/components/PostCard.js
+index 3fe759a..1fe323e 100644
+--- a/components/PostCard.js
++++ b/components/PostCard.js
+@@ -67,7 +67,7 @@ function CollectionSheet({ visible, onClose, postId, favApi }) {
+ }
+ 
+ export default function PostCard({ post, onToggleLike, onAddComment, favApi, defaultOpen = false, onOpenCreator }) {
+-  const canOpenCreator = !!onOpenCreator && !post.mine;
++  const canOpenCreator = !!onOpenCreator && !post.mine && !!post.creatorId;
+   const [showDetail, setShowDetail] = useState(defaultOpen);
+   const [showComments, setShowComments] = useState(false);
+   const [showSheet, setShowSheet] = useState(false);
+@@ -87,7 +87,7 @@ export default function PostCard({ post, onToggleLike, onAddComment, favApi, def
+         style={styles.cardHead}
+         activeOpacity={canOpenCreator ? 0.7 : 1}
+         disabled={!canOpenCreator}
+-        onPress={() => onOpenCreator(post.author)}
++        onPress={() => onOpenCreator(post.creatorId)}
+       >
+         <View style={styles.avatar}>
+           <Avatar emoji={post.emoji} uri={post.avatarUrl} fontSize={22} />
+diff --git a/lib/api.js b/lib/api.js
+index 6adda02..71ef96d 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -71,6 +71,8 @@ export function mapPost(row, currentUserId) {
+ 
+     // ดึงชื่อผู้ใช้จากตาราง users
+     author: row.users?.username || "ไม่ระบุชื่อ",
++    creatorId: row.creator_id, // ใช้เปิดหน้า Creator และติดตาม
++    avatarUrl: row.users?.avatar_url || null,
+     emoji: "🍽️", // ฐานข้อมูลไม่มีรูปโปรไฟล์ เลยใช้อีโมจิแทนไปก่อน
+ 
+     mine: row.creator_id === currentUserId,
+@@ -94,7 +96,7 @@ export async function fetchPosts(currentUserId) {
+     .select(
+       `
+       *,
+-      users ( username ),
++      users ( username, avatar_url ),
+       recipe_ingredients ( ingredient_name, amount ),
+       recipe_steps ( step_number, instruction ),
+       likes ( user_id ),
+@@ -283,3 +285,116 @@ export async function clearAvatar(userId) {
+     .eq("user_id", userId);
+   if (error) throw error;
+ }
++
++
++// ---------- Creator / ติดตาม ----------
++
++// รายชื่อผู้ใช้ทั้งหมด (ใช้เป็น Creator)
++export async function fetchCreators() {
++  const { data, error } = await supabase
++    .from("users")
++    .select("user_id, username, avatar_url");
++  if (error) throw error;
++  return (data || []).map((u) => ({
++    id: u.user_id,
++    name: u.username || "ไม่ระบุชื่อ",
++    avatarUrl: u.avatar_url || null,
++  }));
++}
++
++// การติดตามทั้งหมด [{ follower_id, following_id }]
++export async function fetchFollows() {
++  const { data, error } = await supabase
++    .from("follows")
++    .select("follower_id, following_id");
++  if (error) throw error;
++  return data || [];
++}
++
++export async function followUser(myId, targetId) {
++  const { error } = await supabase
++    .from("follows")
++    .insert({ follower_id: myId, following_id: targetId });
++  if (error) throw error;
++}
++
++export async function unfollowUser(myId, targetId) {
++  const { error } = await supabase
++    .from("follows")
++    .delete()
++    .eq("follower_id", myId)
++    .eq("following_id", targetId);
++  if (error) throw error;
++}
++
++// ---------- ไลก์ ----------
++
++export async function likePost(postId, userId) {
++  const { error } = await supabase
++    .from("likes")
++    .insert({ post_id: postId, user_id: userId });
++  if (error) throw error;
++}
++
++export async function unlikePost(postId, userId) {
++  const { error } = await supabase
++    .from("likes")
++    .delete()
++    .eq("post_id", postId)
++    .eq("user_id", userId);
++  if (error) throw error;
++}
++
++// ---------- Favorite / กลุ่มที่บันทึก ----------
++
++// คืน { รหัสโพสต์: [รหัสกลุ่ม, ...] }
++export async function fetchFavorites(userId) {
++  const { data, error } = await supabase
++    .from("favorites")
++    .select("post_id, collection_ids")
++    .eq("user_id", userId);
++  if (error) throw error;
++  const favs = {};
++  (data || []).forEach((r) => {
++    favs[r.post_id] = r.collection_ids || [];
++  });
++  return favs;
++}
++
++// เพิ่ม Favorite หรืออัปเดตกลุ่มของโพสต์ที่บันทึกไว้
++export async function saveFavorite(userId, postId, collectionIds = []) {
++  const { error } = await supabase.from("favorites").upsert(
++    { user_id: userId, post_id: postId, collection_ids: collectionIds },
++    { onConflict: "user_id,post_id" },
++  );
++  if (error) throw error;
++}
++
++export async function removeFavorite(userId, postId) {
++  const { error } = await supabase
++    .from("favorites")
++    .delete()
++    .eq("user_id", userId)
++    .eq("post_id", postId);
++  if (error) throw error;
++}
++
++export async function fetchCollections(userId) {
++  const { data, error } = await supabase
++    .from("collections")
++    .select("collection_id, name")
++    .eq("user_id", userId)
++    .order("created_at", { ascending: true });
++  if (error) throw error;
++  return (data || []).map((c) => ({ id: c.collection_id, name: c.name }));
++}
++
++export async function createCollectionInDB(userId, name) {
++  const { data, error } = await supabase
++    .from("collections")
++    .insert({ user_id: userId, name })
++    .select("collection_id, name")
++    .single();
++  if (error) throw error;
++  return { id: data.collection_id, name: data.name };
++}
+diff --git a/screens/CreatorScreen.js b/screens/CreatorScreen.js
+index b0b57a8..6e8314f 100644
+--- a/screens/CreatorScreen.js
++++ b/screens/CreatorScreen.js
+@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+ import PostCard from '../components/PostCard';
++import Avatar from '../components/Avatar';
+ 
+ // หน้า Creator: โปรไฟล์ของ Creator + โพสต์ทั้งหมดของเขา
+ export default function CreatorScreen({
+@@ -41,11 +42,9 @@ export default function CreatorScreen({
+           <>
+             <View style={styles.profile}>
+               <View style={styles.avatar}>
+-                <Text style={{ fontSize: 44 }}>{creator.emoji}</Text>
++                <Avatar emoji={creator.emoji} uri={creator.avatarUrl} fontSize={44} />
+               </View>
+               <Text style={styles.name}>{creator.name}</Text>
+-              <Text style={styles.handle}>@{creator.handle}</Text>
+-              <Text style={styles.focus}>{creator.focus}</Text>
+ 
+               <View style={styles.stats}>
+                 <View style={styles.stat}>
+@@ -64,7 +63,7 @@ export default function CreatorScreen({
+ 
+               <TouchableOpacity
+                 style={[styles.followBtn, isFollowing && styles.followBtnOn]}
+-                onPress={() => onToggleFollow(creator.name)}
++                onPress={() => onToggleFollow(creator.id)}
+               >
+                 <Ionicons
+                   name={isFollowing ? 'checkmark' : 'add'}
+@@ -122,7 +121,7 @@ const styles = StyleSheet.create({
+   empty: { textAlign: 'center', color: colors.muted, marginTop: 30 },
+ 
+   profile: { backgroundColor: '#fff', borderRadius: 24, padding: 18, alignItems: 'center' },
+-  avatar: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#FFE0B2', alignItems: 'center', justifyContent: 'center' },
++  avatar: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#FFE0B2', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+   name: { fontSize: 20, fontWeight: 'bold', color: colors.text, marginTop: 10 },
+   handle: { color: colors.muted, fontSize: 13, marginTop: 2 },
+   focus: { color: colors.primary, fontSize: 13, marginTop: 6 },
+diff --git a/screens/HomeScreen.js b/screens/HomeScreen.js
+index 19ba510..0d7c618 100644
+--- a/screens/HomeScreen.js
++++ b/screens/HomeScreen.js
+@@ -3,7 +3,6 @@ import { useState } from "react";
+ import {
+   Image,
+   ImageBackground,
+-  SafeAreaView,
+   ScrollView,
+   StyleSheet,
+   Text,
+@@ -11,6 +10,7 @@ import {
+   TouchableOpacity,
+   View,
+ } from "react-native";
++import { useSafeAreaInsets } from "react-native-safe-area-context";
+ import Avatar from "../components/Avatar";
+ import PostCard from "../components/PostCard";
+ import { colors } from "../theme";
+@@ -194,7 +194,7 @@ function RecommendCard({ post, ready, onPress, following, onToggleFollow }) {
+         <Text style={{ fontSize: 44 }}>{post.emoji}</Text>
+         <TouchableOpacity
+           style={[styles.followBtn, following && styles.followBtnOn]}
+-          onPress={() => onToggleFollow(post.author)}
++          onPress={() => onToggleFollow(post.creatorId)}
+         >
+           <Text style={[styles.followText, following && { color: "#fff" }]}>
+             {following ? "Following" : "Follow"}
+@@ -241,6 +241,8 @@ export default function HomeScreen({
+   onToggleFollow,
+ }) {
+   const [prompt, setPrompt] = useState("");
++  // เว้นที่ด้านบนให้รอยบากกล้อง/แถบสถานะ ไม่ให้ชื่อและกระดิ่งไปติดกล้อง
++  const insets = useSafeAreaInsets();
+ 
+   // ฟีดแสดงเฉพาะโพสต์ของคนอื่นที่เปิดให้ขึ้นฟีด
+   const feedPosts = posts.filter((p) => !p.mine && p.feed !== false);
+@@ -255,13 +257,13 @@ export default function HomeScreen({
+   })).filter((r) => r.post);
+ 
+   return (
+-    <SafeAreaView style={styles.container}>
++    <View style={styles.container}>
+       <ScrollView
+         contentContainerStyle={{ paddingBottom: 24 }}
+         showsVerticalScrollIndicator={false}
+         keyboardShouldPersistTaps="handled"
+       >
+-        <View style={styles.topBg}>
++        <View style={[styles.topBg, { paddingTop: 16 + insets.top }]}>
+           <Header
+             name={profile.name}
+             avatar={profile.avatar}
+@@ -304,7 +306,7 @@ export default function HomeScreen({
+                 post={r.post}
+                 ready={r.ready}
+                 onPress={() => onOpenPost(r.postId)}
+-                following={!!following[r.post.author]}
++                following={!!following[r.post.creatorId]}
+                 onToggleFollow={onToggleFollow}
+               />
+             ))}
+@@ -335,7 +337,7 @@ export default function HomeScreen({
+           )}
+         </View>
+       </ScrollView>
+-    </SafeAreaView>
++    </View>
+   );
+ }
+ 
+diff --git a/screens/LoginScreen.js b/screens/LoginScreen.js
+index 7664b9f..bf7f8a1 100644
+--- a/screens/LoginScreen.js
++++ b/screens/LoginScreen.js
+@@ -4,7 +4,6 @@ import {
+   Alert,
+   Image,
+   ImageBackground,
+-  SafeAreaView,
+   ScrollView,
+   StyleSheet,
+   Text,
+@@ -12,6 +11,7 @@ import {
+   TouchableOpacity,
+   View,
+ } from "react-native";
++import { SafeAreaView } from "react-native-safe-area-context";
+ import { loginUser } from "../lib/api";
+ import { colors } from "../theme";
+ 
+diff --git a/screens/MainScreen.js b/screens/MainScreen.js
+index ebf7337..bddbd47 100644
+--- a/screens/MainScreen.js
++++ b/screens/MainScreen.js
+@@ -1,12 +1,22 @@
+ import { useEffect, useMemo, useState } from "react";
+ import { BackHandler, Platform, StyleSheet, View } from "react-native";
+ import BottomTabs from "../components/BottomTabs";
+-import { findCreator } from "../data/creators";
+ import {
+   clearAvatar,
++  createCollectionInDB,
+   createPostInDB,
+   deletePostInDB,
++  fetchCollections,
++  fetchCreators,
++  fetchFavorites,
++  fetchFollows,
+   fetchPosts,
++  followUser,
++  likePost,
++  removeFavorite,
++  saveFavorite,
++  unfollowUser,
++  unlikePost,
+   uploadAvatar,
+ } from "../lib/api";
+ import { supabase } from "../lib/supabase";
+@@ -100,6 +110,11 @@ export default function MainScreen({ onLogout }) {
+   const [profile, setProfile] = useState(INITIAL_PROFILE);
+   const [notifications, setNotifications] = useState(SAMPLE_NOTIFICATIONS);
+   const [scanHistory, setScanHistory] = useState(SAMPLE_SCANS);
++  const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
++  const [creators, setCreators] = useState([]); // ผู้ใช้ทั้งหมดจาก Supabase
++  const [follows, setFollows] = useState([]); // [{ follower_id, following_id }]
++  const [collections, setCollections] = useState([]); // กลุ่ม Favorite
++  const [favs, setFavs] = useState({}); // { รหัสโพสต์: [รหัสกลุ่ม, ...] }
+ 
+   const top = stack.length > 0 ? stack[stack.length - 1] : null;
+   const push = (name, params = {}) => setStack((s) => [...s, { name, params }]);
+@@ -125,6 +140,38 @@ export default function MainScreen({ onLogout }) {
+   useEffect(() => {
+     let cancelled = false;
+ 
++    // โหลดข้อมูลเสริมจาก Supabase (แต่ละอย่างพังแยกกัน ไม่ทำให้แอปทั้งหมดพัง)
++    const loadExtras = async (uid) => {
++      const [cr, fo, fa, co] = await Promise.allSettled([
++        fetchCreators(),
++        fetchFollows(),
++        fetchFavorites(uid),
++        fetchCollections(uid),
++      ]);
++      if (cancelled) return;
++      if (cr.status === "fulfilled") setCreators(cr.value);
++      else console.log("โหลดรายชื่อ creator ไม่สำเร็จ:", cr.reason?.message);
++      if (fo.status === "fulfilled") setFollows(fo.value);
++      else console.log("โหลดการติดตามไม่สำเร็จ:", fo.reason?.message);
++      if (fa.status === "fulfilled") setFavs(fa.value);
++      else console.log("โหลด Favorite ไม่สำเร็จ:", fa.reason?.message);
++      if (co.status === "fulfilled") {
++        if (co.value.length > 0) setCollections(co.value);
++        else {
++          // ผู้ใช้ใหม่: สร้างกลุ่มเริ่มต้นให้ 2 กลุ่ม
++          try {
++            const defaults = [];
++            for (const n of ["อยากลองทำ", "โปรตีนสูง"]) {
++              defaults.push(await createCollectionInDB(uid, n));
++            }
++            if (!cancelled) setCollections(defaults);
++          } catch (e) {
++            console.log("สร้างกลุ่มเริ่มต้นไม่สำเร็จ:", e?.message);
++          }
++        }
++      } else console.log("โหลดกลุ่ม Favorite ไม่สำเร็จ:", co.reason?.message);
++    };
++
+     const loadData = async () => {
+       try {
+         // 1. ดึงข้อมูลผู้ใช้ที่ล็อกอินอยู่ปัจจุบันจาก Auth
+@@ -133,6 +180,9 @@ export default function MainScreen({ onLogout }) {
+         } = await supabase.auth.getUser();
+ 
+         if (user) {
++          setUserId(user.id);
++          loadExtras(user.id); // ติดตาม / Favorite / รายชื่อ creator (ไม่รอ ไม่ให้ขวางการโหลดโพสต์)
++
+           // 2. ดึงข้อมูลโปรไฟล์จริงจากตาราง users โดยใช้ user_id
+           const { data: profileData, error: profileError } = await supabase
+             .from("users")
+@@ -218,30 +268,71 @@ export default function MainScreen({ onLogout }) {
+     }
+   };
+ 
+-  // ---------- ติดตาม Creator ----------
+-  const [following, setFollowing] = useState({}); // { ชื่อ creator: true }
+-  const toggleFollow = (name) =>
+-    setFollowing((prev) => {
+-      const next = { ...prev };
+-      if (next[name]) delete next[name];
+-      else next[name] = true;
+-      return next;
++  // ---------- ติดตาม Creator (บันทึกลง Supabase ตาราง follows) ----------
++  const following = useMemo(() => {
++    const m = {};
++    follows.forEach((f) => {
++      if (f.follower_id === userId) m[f.following_id] = true;
+     });
+-  const openCreator = (name) => {
++    return m;
++  }, [follows, userId]);
++  const followerCount = (id) =>
++    follows.filter((f) => f.following_id === id).length;
++
++  const toggleFollow = async (targetId) => {
++    if (!userId || !targetId || targetId === userId) return;
++    const was = !!following[targetId];
++    const row = { follower_id: userId, following_id: targetId };
++    const apply = (on) =>
++      setFollows((prev) =>
++        on
++          ? [...prev, row]
++          : prev.filter(
++              (f) =>
++                !(f.follower_id === userId && f.following_id === targetId),
++            ),
++      );
++    apply(!was); // อัปเดตหน้าจอทันที
++    try {
++      if (was) await unfollowUser(userId, targetId);
++      else await followUser(userId, targetId);
++    } catch (error) {
++      console.log("ติดตามไม่สำเร็จ:", error);
++      apply(was); // ย้อนกลับ
++      alert("ติดตามไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
++    }
++  };
++  const openCreator = (id) => {
++    if (!id) return;
+     // ถ้าอยู่หน้าของ creator คนนี้อยู่แล้ว ไม่ต้องเปิดซ้ำ
+-    if (top && top.name === "creator" && top.params.name === name) return;
+-    push("creator", { name });
++    if (top && top.name === "creator" && top.params.id === id) return;
++    push("creator", { id });
+   };
+   const openPost = (id) => push("postDetail", { postId: id });
+ 
+-  const toggleLike = (id) =>
++  // ---------- ไลก์ (บันทึกลง Supabase ตาราง likes) ----------
++  const setLiked = (id, liked) =>
+     setPosts((prev) =>
+       prev.map((p) =>
+-        p.id === id
+-          ? { ...p, liked: !p.liked, likes: p.likes + (p.liked ? -1 : 1) }
++        p.id === id && p.liked !== liked
++          ? { ...p, liked, likes: p.likes + (liked ? 1 : -1) }
+           : p,
+       ),
+     );
++  const toggleLike = async (id) => {
++    const target = posts.find((p) => p.id === id);
++    if (!target || !userId) return;
++    const willLike = !target.liked;
++    setLiked(id, willLike);
++    try {
++      if (willLike) await likePost(id, userId);
++      else await unlikePost(id, userId);
++    } catch (error) {
++      console.log("ไลก์ไม่สำเร็จ:", error);
++      setLiked(id, !willLike);
++      alert("กดไลก์ไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
++    }
++  };
+ 
+   const addComment = (id, text) =>
+     setPosts((prev) =>
+@@ -279,35 +370,67 @@ export default function MainScreen({ onLogout }) {
+   );
+   const myPosts = viewPosts.filter((p) => p.mine);
+ 
+-  // ---------- Favorite ----------
++  // รายชื่อ creator สำหรับหน้าค้นหา (ไม่รวมตัวเอง) พร้อมจำนวนผู้ติดตาม/โพสต์
++  const creatorList = creators
++    .filter((c) => c.id !== userId)
++    .map((c) => ({
++      ...c,
++      followers: followerCount(c.id),
++      postCount: posts.filter((p) => p.creatorId === c.id).length,
++    }))
++    .sort((a, b) => b.followers - a.followers || b.postCount - a.postCount);
++
++  // ---------- Favorite (บันทึกลง Supabase ตาราง favorites / collections) ----------
+   // favs = { รหัสโพสต์: [รหัสกลุ่ม, ...] } ถ้ามีรหัสโพสต์ แปลว่าบันทึกอยู่
+-  const [collections, setCollections] = useState([
+-    { id: "c1", name: "อยากลองทำ" },
+-    { id: "c2", name: "โปรตีนสูง" },
+-  ]);
+-  const [favs, setFavs] = useState({});
+-
+-  const toggleFav = (postId) =>
++  const toggleFav = async (postId) => {
++    if (!userId) return;
++    const was = favs[postId] !== undefined;
++    const old = favs[postId];
+     setFavs((prev) => {
+       const next = { ...prev };
+-      if (next[postId] !== undefined) delete next[postId];
++      if (was) delete next[postId];
+       else next[postId] = [];
+       return next;
+     });
++    try {
++      if (was) await removeFavorite(userId, postId);
++      else await saveFavorite(userId, postId, []);
++    } catch (error) {
++      console.log("บันทึก Favorite ไม่สำเร็จ:", error);
++      setFavs((prev) => {
++        const next = { ...prev };
++        if (was) next[postId] = old;
++        else delete next[postId];
++        return next;
++      });
++      alert("บันทึก Favorite ไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
++    }
++  };
+ 
+-  const toggleInCollection = (postId, cid) =>
+-    setFavs((prev) => {
+-      const cur = prev[postId] || [];
+-      return {
+-        ...prev,
+-        [postId]: cur.includes(cid)
+-          ? cur.filter((x) => x !== cid)
+-          : [...cur, cid],
+-      };
+-    });
++  const toggleInCollection = async (postId, cid) => {
++    if (!userId) return;
++    const cur = favs[postId] || [];
++    const next = cur.includes(cid) ? cur.filter((x) => x !== cid) : [...cur, cid];
++    setFavs((prev) => ({ ...prev, [postId]: next }));
++    try {
++      await saveFavorite(userId, postId, next);
++    } catch (error) {
++      console.log("จัดกลุ่ม Favorite ไม่สำเร็จ:", error);
++      setFavs((prev) => ({ ...prev, [postId]: cur }));
++      alert("จัดกลุ่มไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
++    }
++  };
+ 
+-  const createCollection = (name) =>
+-    setCollections((prev) => [...prev, { id: "c" + Date.now(), name }]);
++  const createCollection = async (name) => {
++    if (!userId) return;
++    try {
++      const c = await createCollectionInDB(userId, name);
++      setCollections((prev) => [...prev, c]);
++    } catch (error) {
++      console.log("สร้างกลุ่มไม่สำเร็จ:", error);
++      alert("สร้างกลุ่มไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
++    }
++  };
+ 
+   const favApi = {
+     favs,
+@@ -402,14 +525,23 @@ export default function MainScreen({ onLogout }) {
+             onBack={pop}
+           />
+         );
+-      case "creator":
++      case "creator": {
++        const cid = top.params.id;
++        const fromList = creators.find((c) => c.id === cid);
++        const fromPost = viewPosts.find((p) => p.creatorId === cid);
++        const base =
++          fromList ||
++          (fromPost
++            ? { id: cid, name: fromPost.author, avatarUrl: fromPost.avatarUrl }
++            : null);
++        const creator = base
++          ? { ...base, followers: followerCount(cid), emoji: "🧑‍🍳" }
++          : null;
+         return (
+           <CreatorScreen
+-            creator={findCreator(top.params.name)}
+-            posts={viewPosts.filter(
+-              (p) => p.author === top.params.name && !p.mine,
+-            )}
+-            isFollowing={!!following[top.params.name]}
++            creator={creator}
++            posts={viewPosts.filter((p) => p.creatorId === cid && !p.mine)}
++            isFollowing={!!following[cid]}
+             onToggleFollow={toggleFollow}
+             favApi={favApi}
+             onToggleLike={toggleLike}
+@@ -417,6 +549,7 @@ export default function MainScreen({ onLogout }) {
+             onBack={pop}
+           />
+         );
++      }
+       case "favorites":
+       case "liked":
+         return (
+@@ -499,6 +632,7 @@ export default function MainScreen({ onLogout }) {
+         {tab === "search" && (
+           <SearchScreen
+             posts={viewPosts}
++            creators={creatorList}
+             following={following}
+             onToggleFollow={toggleFollow}
+             onToggleLike={toggleLike}
+diff --git a/screens/PostScreen.js b/screens/PostScreen.js
+index 9cf495c..554adaf 100644
+--- a/screens/PostScreen.js
++++ b/screens/PostScreen.js
+@@ -4,7 +4,6 @@ import { useState } from "react";
+ import {
+   Image,
+   ImageBackground,
+-  SafeAreaView,
+   ScrollView,
+   StyleSheet,
+   Text,
+@@ -12,6 +11,7 @@ import {
+   TouchableOpacity,
+   View,
+ } from "react-native";
++import { SafeAreaView } from "react-native-safe-area-context";
+ import { colors } from "../theme";
+ 
+ const CATEGORIES = [
+@@ -277,7 +277,7 @@ export default function PostScreen({ onAddPost, onOpenMyPosts }) {
+       style={styles.background}
+       resizeMode="cover"
+     >
+-      <SafeAreaView style={styles.container}>
++      <SafeAreaView edges={["top"]} style={styles.container}>
+         <Text style={styles.pageTitle}>สร้างโพสต์</Text>
+         {done && (
+           <View style={styles.banner}>
+diff --git a/screens/SearchScreen.js b/screens/SearchScreen.js
+index d7ca832..50b48b6 100644
+--- a/screens/SearchScreen.js
++++ b/screens/SearchScreen.js
+@@ -12,7 +12,7 @@ import {
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+-import { CREATORS } from '../data/creators';
++import Avatar from '../components/Avatar';
+ import { nutriText } from '../utils';
+ 
+ // ---------- ข้อมูลจำลอง ----------
+@@ -46,18 +46,18 @@ function CreatorCard({ item, isFollowing, onToggleFollow, onPress }) {
+   return (
+     <TouchableOpacity style={styles.creatorCard} activeOpacity={0.85} onPress={onPress}>
+       <View style={styles.creatorAvatar}>
+-        <Text style={{ fontSize: 30 }}>{item.emoji}</Text>
++        <Avatar emoji="🧑‍🍳" uri={item.avatarUrl} fontSize={30} />
+       </View>
+       <Text style={styles.creatorName} numberOfLines={1}>
+         {item.name}
+       </Text>
+       <Text style={styles.creatorFocus} numberOfLines={1}>
+-        {item.focus}
++        {item.postCount} โพสต์
+       </Text>
+       <Text style={styles.creatorFollowers}>{item.followers} ผู้ติดตาม</Text>
+       <TouchableOpacity
+         style={[styles.followBtn, isFollowing && styles.followBtnOn]}
+-        onPress={() => onToggleFollow(item.name)}>
++        onPress={() => onToggleFollow(item.id)}>
+         <Text style={[styles.followText, isFollowing && { color: '#fff' }]}>
+           {isFollowing ? 'Following' : 'Follow'}
+         </Text>
+@@ -104,6 +104,7 @@ function MenuRow({ item, rank, onPress, onToggleLike }) {
+ // ---------- หน้าค้นหา ----------
+ export default function SearchScreen({
+   posts = [],
++  creators: allCreators = [],
+   following = {},
+   onToggleFollow,
+   onToggleLike,
+@@ -116,12 +117,8 @@ export default function SearchScreen({
+ 
+   const q = query.trim().toLowerCase();
+ 
+-  const creators = CREATORS.filter(
+-    (c) =>
+-      !q ||
+-      c.name.toLowerCase().includes(q) ||
+-      c.handle.toLowerCase().includes(q) ||
+-      c.focus.includes(q)
++  const creators = allCreators.filter(
++    (c) => !q || c.name.toLowerCase().includes(q)
+   );
+ 
+   // หมวดของโพสต์: ใช้ cats ถ้ามี ไม่งั้นใช้หมวดที่ผู้โพสต์เลือก
+@@ -189,9 +186,9 @@ export default function SearchScreen({
+               <CreatorCard
+                 key={c.id}
+                 item={c}
+-                isFollowing={!!following[c.name]}
++                isFollowing={!!following[c.id]}
+                 onToggleFollow={onToggleFollow}
+-                onPress={() => onOpenCreator(c.name)}
++                onPress={() => onOpenCreator(c.id)}
+               />
+             ))}
+           </ScrollView>
+@@ -323,6 +320,7 @@ const styles = StyleSheet.create({
+     alignItems: 'center',
+     justifyContent: 'center',
+     marginBottom: 8,
++    overflow: 'hidden',
+   },
+   creatorName: { fontWeight: 'bold', color: colors.text, fontSize: 13 },
+   creatorFocus: { color: colors.muted, fontSize: 11, marginTop: 2 },

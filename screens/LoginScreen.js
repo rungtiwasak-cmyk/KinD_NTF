@@ -4,7 +4,6 @@ import {
   Alert,
   Image,
   ImageBackground,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { loginUser } from "../lib/api";
 import { colors } from "../theme";
 

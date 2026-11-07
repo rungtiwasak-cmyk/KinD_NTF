@@ -1,0 +1,162 @@
+diff --git a/lib/api.js b/lib/api.js
+index bbde931..a10fe64 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -50,6 +50,7 @@ export function mapPost(row, currentUserId) {
+     title: row.caption ? row.caption.substring(0, 30) + "..." : "ไม่มีชื่อ",
+     caption: row.caption,
+     category: row.category,
++    region: row.region || null,
+ 
+     // แปลงส่วนผสมจากตารางแยก ให้กลายเป็น Array ตามที่แอปน่าจะใช้
+     ingredients: (row.recipe_ingredients || []).map((i) =>
+@@ -153,6 +154,7 @@ export async function createPostInDB(postData, userId) {
+         creator_id: userId,
+         caption: postData.caption,
+         category: postData.category,
++        region: postData.region || null,
+         media_url: mediaUrl, // ใส่ลิงก์รูปที่ได้จากข้อ 1 ลงไป
+         nutrition_info: { kcal: postData.kcal, protein: postData.protein },
+       })
+diff --git a/screens/MainScreen.js b/screens/MainScreen.js
+index 5590104..3a3f643 100644
+--- a/screens/MainScreen.js
++++ b/screens/MainScreen.js
+@@ -1,5 +1,11 @@
+ import { useEffect, useMemo, useState } from "react";
+-import { BackHandler, Platform, StyleSheet, View } from "react-native";
++import {
++  BackHandler,
++  KeyboardAvoidingView,
++  Platform,
++  StyleSheet,
++  View,
++} from "react-native";
+ import BottomTabs from "../components/BottomTabs";
+ import {
+   addCommentInDB,
+@@ -619,7 +625,9 @@ export default function MainScreen({ onLogout }) {
+ 
+   return (
+     <View style={{ flex: 1, backgroundColor: colors.bg }}>
+-      <View style={{ flex: 1 }}>
++      {/* ดันเนื้อหาขึ้นเหนือแป้นพิมพ์ จะได้เห็นสิ่งที่กำลังพิมพ์ (ทุกหน้า) */}
++      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
++        <View style={{ flex: 1 }}>
+         {tab === "home" && (
+           <HomeScreen
+             posts={viewPosts}
+@@ -677,7 +685,8 @@ export default function MainScreen({ onLogout }) {
+             {renderOverlay()}
+           </View>
+         )}
+-      </View>
++        </View>
++      </KeyboardAvoidingView>
+       <BottomTabs active={tab} onChange={changeTab} />
+     </View>
+   );
+diff --git a/screens/PostScreen.js b/screens/PostScreen.js
+index 554adaf..65bd37b 100644
+--- a/screens/PostScreen.js
++++ b/screens/PostScreen.js
+@@ -28,6 +28,15 @@ const CATEGORIES = [
+   "อื่นๆ",
+ ];
+ 
++// ภาคของอาหารไทย / ถ้าไม่ใช่อาหารไทยให้เลือก "อาหารต่างประเทศ"
++const REGIONS = [
++  "ภาคเหนือ",
++  "ภาคอีสาน",
++  "ภาคกลาง",
++  "ภาคใต้",
++  "อาหารต่างประเทศ",
++];
++
+ // ---------- ส่วนประกอบย่อย ----------
+ function Label({ title, hint, optional }) {
+   return (
+@@ -105,6 +114,7 @@ function CreatePost({ onSubmit }) {
+   const [media, setMedia] = useState(null);
+   const [caption, setCaption] = useState("");
+   const [category, setCategory] = useState(null);
++  const [region, setRegion] = useState(null);
+   const [ingredients, setIngredients] = useState([""]);
+   const [kcal, setKcal] = useState("");
+   const [protein, setProtein] = useState("");
+@@ -133,6 +143,7 @@ function CreatePost({ onSubmit }) {
+     if (!media) e.media = "กรุณาเลือกรูปหรือวิดีโอ";
+     if (!caption.trim()) e.caption = "กรุณาใส่แคปชั่น";
+     if (!category) e.category = "กรุณาเลือกหมวดหมู่";
++    if (!region) e.region = "กรุณาเลือกภาค (ถ้าไม่ใช่อาหารไทยเลือก อาหารต่างประเทศ)";
+     if (!ingredients.some((s) => s.trim()))
+       e.ingredients = "กรุณากรอกส่วนผสมอย่างน้อย 1 รายการ";
+     if (!steps.some((s) => s.trim()))
+@@ -144,6 +155,7 @@ function CreatePost({ onSubmit }) {
+       media,
+       caption: caption.trim(),
+       category,
++      region,
+       ingredients: ingredients.map((s) => s.trim()).filter(Boolean),
+       kcal: kcal.trim(),
+       protein: protein.trim(),
+@@ -155,6 +167,7 @@ function CreatePost({ onSubmit }) {
+     <ScrollView
+       contentContainerStyle={styles.scroll}
+       keyboardShouldPersistTaps="handled"
++      keyboardDismissMode="on-drag"
+       showsVerticalScrollIndicator={false}
+     >
+       {/* รูป/วิดีโอ */}
+@@ -208,6 +221,20 @@ function CreatePost({ onSubmit }) {
+       </View>
+       <ErrorText msg={errors.category} />
+ 
++      {/* ภาค / อาหารต่างประเทศ */}
++      <Label title="ภาค" hint="ไม่ใช่อาหารไทย เลือก อาหารต่างประเทศ" />
++      <View style={styles.chipWrap}>
++        {REGIONS.map((r) => (
++          <Chip
++            key={r}
++            label={r}
++            selected={region === r}
++            onPress={() => setRegion(r)}
++          />
++        ))}
++      </View>
++      <ErrorText msg={errors.region} />
++
+       {/* ส่วนผสม */}
+       <Label title="ส่วนผสม (เครื่องปรุง)" hint="เช่น อกไก่ 200 g" />
+       <ListEditor
+@@ -316,7 +343,7 @@ const styles = StyleSheet.create({
+     flex: 1,
+     backgroundColor: "transparent",
+   },
+-  scroll: { padding: 16, paddingBottom: 40 },
++  scroll: { padding: 16, paddingBottom: 120 },
+ 
+   labelRow: {
+     flexDirection: "row",
+diff --git a/screens/SearchScreen.js b/screens/SearchScreen.js
+index 50b48b6..47283b6 100644
+--- a/screens/SearchScreen.js
++++ b/screens/SearchScreen.js
+@@ -26,7 +26,7 @@ const CATEGORIES = [
+   'เปรี้ยว',
+   'หวาน',
+ ];
+-const REGIONS = ['ภาคเหนือ', 'ภาคอีสาน', 'ภาคกลาง', 'ภาคใต้'];
++const REGIONS = ['ภาคเหนือ', 'ภาคอีสาน', 'ภาคกลาง', 'ภาคใต้', 'อาหารต่างประเทศ'];
+ 
+ // ---------- ชิปตัวกรอง ----------
+ function Chip({ label, selected, onPress }) {
+@@ -138,7 +138,7 @@ export default function SearchScreen({
+   let title = '🔥 เมนูยอดนิยมวันนี้';
+   if (cat && region) title = `🏆 10 อันดับเมนู${cat} (${region})`;
+   else if (cat) title = `🏆 10 อันดับเมนู${cat}ประจำวัน`;
+-  else if (region) title = `🏆 10 อันดับอาหาร${region}`;
++  else if (region) title = region.startsWith('อาหาร') ? `🏆 10 อันดับ${region}` : `🏆 10 อันดับอาหาร${region}`;
+   if (q) title = `ผลการค้นหาเมนู "${query.trim()}"`;
+ 
+   const clearAll = () => {

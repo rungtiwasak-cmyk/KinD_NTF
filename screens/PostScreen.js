@@ -4,7 +4,6 @@ import { useState } from "react";
 import {
   Image,
   ImageBackground,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "../theme";
 
 const CATEGORIES = [
@@ -26,6 +26,15 @@ const CATEGORIES = [
   "ย่าง/อบ",
   "สลัด/คลีน",
   "อื่นๆ",
+];
+
+// ภาคของอาหารไทย / ถ้าไม่ใช่อาหารไทยให้เลือก "อาหารต่างประเทศ"
+const REGIONS = [
+  "ภาคเหนือ",
+  "ภาคอีสาน",
+  "ภาคกลาง",
+  "ภาคใต้",
+  "อาหารต่างประเทศ",
 ];
 
 // ---------- ส่วนประกอบย่อย ----------
@@ -105,6 +114,7 @@ function CreatePost({ onSubmit }) {
   const [media, setMedia] = useState(null);
   const [caption, setCaption] = useState("");
   const [category, setCategory] = useState(null);
+  const [region, setRegion] = useState(null);
   const [ingredients, setIngredients] = useState([""]);
   const [kcal, setKcal] = useState("");
   const [protein, setProtein] = useState("");
@@ -115,10 +125,16 @@ function CreatePost({ onSubmit }) {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images", "videos"],
       quality: 0.7,
+      base64: true, // ให้ได้ข้อมูลรูปมาเลย อัปโหลดขึ้น Supabase ได้ตรงๆ
     });
     if (!result.canceled) {
       const a = result.assets[0];
-      setMedia({ uri: a.uri, type: a.type === "video" ? "video" : "image" });
+      setMedia({
+        uri: a.uri,
+        type: a.type === "video" ? "video" : "image",
+        mimeType: a.mimeType,
+        base64: a.base64 ?? null,
+      });
     }
   };
 
@@ -127,6 +143,7 @@ function CreatePost({ onSubmit }) {
     if (!media) e.media = "กรุณาเลือกรูปหรือวิดีโอ";
     if (!caption.trim()) e.caption = "กรุณาใส่แคปชั่น";
     if (!category) e.category = "กรุณาเลือกหมวดหมู่";
+    if (!region) e.region = "กรุณาเลือกภาค (ถ้าไม่ใช่อาหารไทยเลือก อาหารต่างประเทศ)";
     if (!ingredients.some((s) => s.trim()))
       e.ingredients = "กรุณากรอกส่วนผสมอย่างน้อย 1 รายการ";
     if (!steps.some((s) => s.trim()))
@@ -138,6 +155,7 @@ function CreatePost({ onSubmit }) {
       media,
       caption: caption.trim(),
       category,
+      region,
       ingredients: ingredients.map((s) => s.trim()).filter(Boolean),
       kcal: kcal.trim(),
       protein: protein.trim(),
@@ -149,6 +167,7 @@ function CreatePost({ onSubmit }) {
     <ScrollView
       contentContainerStyle={styles.scroll}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
       showsVerticalScrollIndicator={false}
     >
       {/* รูป/วิดีโอ */}
@@ -201,6 +220,20 @@ function CreatePost({ onSubmit }) {
         ))}
       </View>
       <ErrorText msg={errors.category} />
+
+      {/* ภาค / อาหารต่างประเทศ */}
+      <Label title="ภาค" hint="ไม่ใช่อาหารไทย เลือก อาหารต่างประเทศ" />
+      <View style={styles.chipWrap}>
+        {REGIONS.map((r) => (
+          <Chip
+            key={r}
+            label={r}
+            selected={region === r}
+            onPress={() => setRegion(r)}
+          />
+        ))}
+      </View>
+      <ErrorText msg={errors.region} />
 
       {/* ส่วนผสม */}
       <Label title="ส่วนผสม (เครื่องปรุง)" hint="เช่น อกไก่ 200 g" />
@@ -271,7 +304,7 @@ export default function PostScreen({ onAddPost, onOpenMyPosts }) {
       style={styles.background}
       resizeMode="cover"
     >
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView edges={["top"]} style={styles.container}>
         <Text style={styles.pageTitle}>สร้างโพสต์</Text>
         {done && (
           <View style={styles.banner}>
@@ -310,7 +343,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "transparent",
   },
-  scroll: { padding: 16, paddingBottom: 40 },
+  scroll: { padding: 16, paddingBottom: 120 },
 
   labelRow: {
     flexDirection: "row",

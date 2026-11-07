@@ -8,16 +8,27 @@ import PostCard from '../components/PostCard';
 // โพสต์ 1 ใบ + ปุ่มลบ (กดยืนยัน 2 ครั้ง กันกดพลาด)
 function MyPostItem({ post, onDelete, onToggleLike, onAddComment, favApi }) {
   const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const doDelete = async () => {
+    setBusy(true);
+    try {
+      await onDelete(post.id);
+    } finally {
+      setBusy(false);
+      setConfirm(false);
+    }
+  };
   return (
     <View>
       <View style={styles.deleteRow}>
         {confirm ? (
           <>
             <Text style={styles.confirmText}>ลบโพสต์นี้ถาวร?</Text>
-            <TouchableOpacity style={styles.delYes} onPress={() => onDelete(post.id)}>
-              <Text style={styles.delYesText}>ลบ</Text>
+            <TouchableOpacity style={styles.delYes} onPress={doDelete} disabled={busy}>
+              <Text style={styles.delYesText}>{busy ? 'กำลังลบ...' : 'ลบ'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.delNo} onPress={() => setConfirm(false)}>
+            <TouchableOpacity style={styles.delNo} onPress={() => setConfirm(false)} disabled={busy}>
               <Text style={styles.delNoText}>ยกเลิก</Text>
             </TouchableOpacity>
           </>

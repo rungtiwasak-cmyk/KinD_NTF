@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ImageBackground } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import Avatar from '../components/Avatar';
 import { colors } from '../theme';
 
 const AVATARS = ['👩', '👨', '🧑', '👧', '👦', '👵', '👴', '👩‍🍳', '🧑‍🍳', '🐱', '🐶', '🦊'];
@@ -16,6 +18,10 @@ export default function EditProfileScreen({ profile, onSave, onBack }) {
   const [name, setName] = useState(profile.name);
   const [email, setEmail] = useState(profile.email);
   const [avatar, setAvatar] = useState(profile.avatar);
+  // รูปโปรไฟล์ที่ผู้ใช้เลือกเอง: avatarUrl = รูปที่ใช้อยู่/พรีวิว, avatarPick = ไฟล์ใหม่ที่ยังไม่ได้อัปโหลด หรือ 'clear'
+  const [avatarUrl, setAvatarUrl] = useState(profile.avatarUrl || null);
+  const [avatarPick, setAvatarPick] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [group, setGroup] = useState(profile.group);
   const [allergies, setAllergies] = useState(profile.allergies);
   const [custom, setCustom] = useState('');
@@ -35,14 +41,46 @@ export default function EditProfileScreen({ profile, onSave, onBack }) {
     setCustom('');
   };
 
-  const save = () => {
+  const pickPhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true, // ให้ครอปรูป
+      aspect: [1, 1],
+      quality: 0.6,
+      base64: true,
+    });
+    if (result.canceled) return;
+    const a = result.assets[0];
+    setAvatarUrl(a.uri);
+    setAvatarPick({ uri: a.uri, mimeType: a.mimeType, base64: a.base64 ?? null });
+  };
+
+  const chooseEmoji = (a) => {
+    setAvatar(a);
+    if (avatarUrl) {
+      setAvatarUrl(null);
+      // ถ้าเดิมมีรูปที่อัปโหลดไว้แล้ว ต้องสั่งล้างตอนบันทึก; ถ้าเป็นแค่รูปที่เพิ่งเลือกยังไม่อัปโหลด แค่ยกเลิก
+      setAvatarPick(profile.avatarUrl ? 'clear' : null);
+    }
+  };
+
+  const save = async () => {
     const e = {};
     if (!name.trim()) e.name = 'กรุณากรอกชื่อ';
     if (email.trim() && !/^\S+@\S+\.\S+$/.test(email.trim())) e.email = 'รูปแบบอีเมลไม่ถูกต้อง';
     setErrors(e);
     if (Object.keys(e).length > 0) return;
 
-    onSave({ name: name.trim(), email: email.trim(), avatar, group, allergies });
+    setSaving(true);
+    try {
+      await onSave({ name: name.trim(), email: email.trim(), avatar, group, allergies, avatarPick });
+    } catch (err) {
+      console.log('บันทึกโปรไฟล์ไม่สำเร็จ:', err);
+      setErrors({ save: 'บันทึกไม่สำเร็จ: ' + (err?.message || 'โปรดลองอีกครั้ง') });
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
     setSaved(true);
     timer.current = setTimeout(onBack, 700);
   };
@@ -67,15 +105,19 @@ export default function EditProfileScreen({ profile, onSave, onBack }) {
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
         <View style={{ alignItems: 'center' }}>
           <View style={styles.bigAvatar}>
-            <Text style={{ fontSize: 52 }}>{avatar}</Text>
+            <Avatar emoji={avatar} uri={avatarUrl} fontSize={52} />
           </View>
+          <TouchableOpacity style={styles.photoBtn} onPress={pickPhoto} activeOpacity={0.85}>
+            <Ionicons name="image-outline" size={16} color="#fff" />
+            <Text style={styles.photoBtnText}>เลือกรูปจากเครื่อง</Text>
+          </TouchableOpacity>
         </View>
         <View style={styles.avatarWrap}>
           {AVATARS.map((a) => (
             <TouchableOpacity
               key={a}
-              style={[styles.avatarOpt, avatar === a && styles.avatarOptOn]}
-              onPress={() => setAvatar(a)}
+              style={[styles.avatarOpt, !avatarUrl && avatar === a && styles.avatarOptOn]}
+              onPress={() => chooseEmoji(a)}
             >
               <Text style={{ fontSize: 24 }}>{a}</Text>
             </TouchableOpacity>
@@ -139,8 +181,10 @@ export default function EditProfileScreen({ profile, onSave, onBack }) {
           </View>
         )}
 
-        <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saved}>
-          <Text style={styles.saveText}>บันทึก</Text>
+        {errors.save ? <Text style={styles.error}>{errors.save}</Text> : null}
+
+        <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saved || saving}>
+          <Text style={styles.saveText}>{saving ? 'กำลังบันทึก...' : 'บันทึก'}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -168,7 +212,9 @@ const styles = StyleSheet.create({
   },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 12 },
   title: { flex: 1, fontSize: 20, fontWeight: 'bold', color: colors.text, marginLeft: 6 },
-  bigAvatar: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginTop: 8, borderWidth: 3, borderColor: colors.primaryLight },
+  bigAvatar: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginTop: 8, borderWidth: 3, borderColor: colors.primaryLight, overflow: 'hidden' },
+  photoBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.primary, borderRadius: 20, paddingHorizontal: 16, height: 36, marginTop: 12 },
+  photoBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 13, marginLeft: 6 },
   avatarWrap: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginTop: 14 },
   avatarOpt: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', margin: 4, borderWidth: 2, borderColor: 'transparent' },
   avatarOptOn: { borderColor: colors.primary, backgroundColor: '#FFE0B2' },

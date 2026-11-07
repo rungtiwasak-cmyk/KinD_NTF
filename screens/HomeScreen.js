@@ -3,7 +3,6 @@ import { useState } from "react";
 import {
   Image,
   ImageBackground,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -11,6 +10,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Avatar from "../components/Avatar";
 import PostCard from "../components/PostCard";
 import { colors } from "../theme";
 import { nutriText } from "../utils";
@@ -24,11 +25,11 @@ const RECOMMENDED = [
 ];
 
 // ---------- ส่วนหัว ----------
-function Header({ name, avatar, notifCount, onBell }) {
+function Header({ name, avatar, avatarUrl, notifCount, onBell }) {
   return (
     <View style={styles.header}>
       <View style={styles.avatar}>
-        <Text style={{ fontSize: 28 }}>{avatar}</Text>
+        <Avatar emoji={avatar} uri={avatarUrl} fontSize={28} />
       </View>
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={styles.hello}>สวัสดีคุณ {name} 👋</Text>
@@ -193,7 +194,7 @@ function RecommendCard({ post, ready, onPress, following, onToggleFollow }) {
         <Text style={{ fontSize: 44 }}>{post.emoji}</Text>
         <TouchableOpacity
           style={[styles.followBtn, following && styles.followBtnOn]}
-          onPress={() => onToggleFollow(post.author)}
+          onPress={() => onToggleFollow(post.creatorId)}
         >
           <Text style={[styles.followText, following && { color: "#fff" }]}>
             {following ? "Following" : "Follow"}
@@ -240,6 +241,8 @@ export default function HomeScreen({
   onToggleFollow,
 }) {
   const [prompt, setPrompt] = useState("");
+  // เว้นที่ด้านบนให้รอยบากกล้อง/แถบสถานะ ไม่ให้ชื่อและกระดิ่งไปติดกล้อง
+  const insets = useSafeAreaInsets();
 
   // ฟีดแสดงเฉพาะโพสต์ของคนอื่นที่เปิดให้ขึ้นฟีด
   const feedPosts = posts.filter((p) => !p.mine && p.feed !== false);
@@ -254,16 +257,17 @@ export default function HomeScreen({
   })).filter((r) => r.post);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <ScrollView
         contentContainerStyle={{ paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.topBg}>
+        <View style={[styles.topBg, { paddingTop: 16 + insets.top }]}>
           <Header
             name={profile.name}
             avatar={profile.avatar}
+            avatarUrl={profile.avatarUrl}
             notifCount={unreadCount}
             onBell={onOpenNotifications}
           />
@@ -302,7 +306,7 @@ export default function HomeScreen({
                 post={r.post}
                 ready={r.ready}
                 onPress={() => onOpenPost(r.postId)}
-                following={!!following[r.post.author]}
+                following={!!following[r.post.creatorId]}
                 onToggleFollow={onToggleFollow}
               />
             ))}
@@ -333,7 +337,7 @@ export default function HomeScreen({
           )}
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -357,6 +361,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
   },
   hello: { color: "#fff", fontSize: 17, fontWeight: "bold" },
   helloSub: { color: "#fff", opacity: 0.9, marginTop: 2 },

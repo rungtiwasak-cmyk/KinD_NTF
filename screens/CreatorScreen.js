@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import PostCard from '../components/PostCard';
+import Avatar from '../components/Avatar';
 
 // หน้า Creator: โปรไฟล์ของ Creator + โพสต์ทั้งหมดของเขา
 export default function CreatorScreen({
@@ -41,11 +42,9 @@ export default function CreatorScreen({
           <>
             <View style={styles.profile}>
               <View style={styles.avatar}>
-                <Text style={{ fontSize: 44 }}>{creator.emoji}</Text>
+                <Avatar emoji={creator.emoji} uri={creator.avatarUrl} fontSize={44} />
               </View>
               <Text style={styles.name}>{creator.name}</Text>
-              <Text style={styles.handle}>@{creator.handle}</Text>
-              <Text style={styles.focus}>{creator.focus}</Text>
 
               <View style={styles.stats}>
                 <View style={styles.stat}>
@@ -64,7 +63,7 @@ export default function CreatorScreen({
 
               <TouchableOpacity
                 style={[styles.followBtn, isFollowing && styles.followBtnOn]}
-                onPress={() => onToggleFollow(creator.name)}
+                onPress={() => onToggleFollow(creator.id)}
               >
                 <Ionicons
                   name={isFollowing ? 'checkmark' : 'add'}
@@ -122,7 +121,7 @@ const styles = StyleSheet.create({
   empty: { textAlign: 'center', color: colors.muted, marginTop: 30 },
 
   profile: { backgroundColor: '#fff', borderRadius: 24, padding: 18, alignItems: 'center' },
-  avatar: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#FFE0B2', alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#FFE0B2', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   name: { fontSize: 20, fontWeight: 'bold', color: colors.text, marginTop: 10 },
   handle: { color: colors.muted, fontSize: 13, marginTop: 2 },
   focus: { color: colors.primary, fontSize: 13, marginTop: 6 },

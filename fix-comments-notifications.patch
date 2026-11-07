@@ -1,0 +1,259 @@
+diff --git a/lib/api.js b/lib/api.js
+index 71ef96d..bbde931 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -81,6 +81,7 @@ export function mapPost(row, currentUserId) {
+ 
+     comments: (row.comments || []).map((c) => ({
+       id: c.comment_id,
++      mine: !!currentUserId && c.user_id === currentUserId,
+       user: c.users?.username || "ไม่ระบุชื่อ",
+       text: c.content,
+     })),
+@@ -100,7 +101,7 @@ export async function fetchPosts(currentUserId) {
+       recipe_ingredients ( ingredient_name, amount ),
+       recipe_steps ( step_number, instruction ),
+       likes ( user_id ),
+-      comments ( comment_id, content, users ( username ) )
++      comments ( comment_id, content, user_id, users ( username ) )
+     `,
+     )
+     .order("created_at", { ascending: false });
+@@ -398,3 +399,62 @@ export async function createCollectionInDB(userId, name) {
+   if (error) throw error;
+   return { id: data.collection_id, name: data.name };
+ }
++
++
++// ---------- คอมเมนต์ ----------
++
++// เพิ่มคอมเมนต์ลงตาราง comments แล้วคืน comment_id
++export async function addCommentInDB(postId, userId, content) {
++  const { data, error } = await supabase
++    .from("comments")
++    .insert({ post_id: postId, user_id: userId, content })
++    .select("comment_id")
++    .single();
++  if (error) throw error;
++  return data.comment_id;
++}
++
++// ---------- แจ้งเตือน (สร้างอัตโนมัติด้วย trigger ในฐานข้อมูล) ----------
++
++function notificationText(n) {
++  const who = n.actor_name || "มีคน";
++  if (n.type === "like") return `${who} ถูกใจโพสต์ของคุณ`;
++  if (n.type === "comment") return `${who} แสดงความคิดเห็นในโพสต์ของคุณ`;
++  if (n.type === "follow") return `${who} เริ่มติดตามคุณ`;
++  return n.message || "มีการแจ้งเตือนใหม่";
++}
++
++export async function fetchNotifications(userId) {
++  const { data, error } = await supabase
++    .from("notifications")
++    .select("*")
++    .eq("user_id", userId)
++    .order("created_at", { ascending: false })
++    .limit(50);
++  if (error) throw error;
++  return (data || []).map((n) => ({
++    id: n.notification_id,
++    type: n.type,
++    text: notificationText(n),
++    at: new Date(n.created_at).getTime(),
++    read: !!n.read,
++    postId: n.post_id || null,
++  }));
++}
++
++export async function markNotificationRead(id) {
++  const { error } = await supabase
++    .from("notifications")
++    .update({ read: true })
++    .eq("notification_id", id);
++  if (error) throw error;
++}
++
++export async function markAllNotificationsRead(userId) {
++  const { error } = await supabase
++    .from("notifications")
++    .update({ read: true })
++    .eq("user_id", userId)
++    .eq("read", false);
++  if (error) throw error;
++}
+diff --git a/screens/MainScreen.js b/screens/MainScreen.js
+index bddbd47..5590104 100644
+--- a/screens/MainScreen.js
++++ b/screens/MainScreen.js
+@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
+ import { BackHandler, Platform, StyleSheet, View } from "react-native";
+ import BottomTabs from "../components/BottomTabs";
+ import {
++  addCommentInDB,
+   clearAvatar,
+   createCollectionInDB,
+   createPostInDB,
+@@ -10,9 +11,12 @@ import {
+   fetchCreators,
+   fetchFavorites,
+   fetchFollows,
++  fetchNotifications,
+   fetchPosts,
+   followUser,
+   likePost,
++  markAllNotificationsRead,
++  markNotificationRead,
+   removeFavorite,
+   saveFavorite,
+   unfollowUser,
+@@ -69,46 +73,13 @@ const SAMPLE_SCANS = [
+   },
+ ];
+ 
+-const SAMPLE_NOTIFICATIONS = [
+-  {
+-    id: 1,
+-    type: "menu",
+-    text: "แซลมอนอบผัก เมนูใหม่ที่เหมาะกับเป้าหมายของคุณ",
+-    at: Date.now() - 12 * 60000,
+-    read: false,
+-    postId: 2,
+-  },
+-  {
+-    id: 2,
+-    type: "follow",
+-    text: "FitFood Pim เริ่มติดตามคุณ",
+-    at: Date.now() - 2 * 3600000,
+-    read: false,
+-  },
+-  {
+-    id: 3,
+-    type: "reply",
+-    text: "หนุ่มกะเพรา ตอบกลับความคิดเห็นของคุณในโพสต์อกไก่ย่างซอสส้ม",
+-    at: Date.now() - 5 * 3600000,
+-    read: true,
+-    postId: 1,
+-  },
+-  {
+-    id: 4,
+-    type: "system",
+-    text: "วันนี้คุณกินไปแล้ว 70% ของเป้าหมายแคลอรี่",
+-    at: Date.now() - 1 * DAY,
+-    read: true,
+-  },
+-];
+-
+ export default function MainScreen({ onLogout }) {
+   const [tab, setTab] = useState("home");
+   // stack ของหน้าที่เปิดทับแท็บ เช่น แจ้งเตือน สแกน รายละเอียดโพสต์
+   const [stack, setStack] = useState([]);
+   const [posts, setPosts] = useState([]);
+   const [profile, setProfile] = useState(INITIAL_PROFILE);
+-  const [notifications, setNotifications] = useState(SAMPLE_NOTIFICATIONS);
++  const [notifications, setNotifications] = useState([]);
+   const [scanHistory, setScanHistory] = useState(SAMPLE_SCANS);
+   const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
+   const [creators, setCreators] = useState([]); // ผู้ใช้ทั้งหมดจาก Supabase
+@@ -334,20 +305,30 @@ export default function MainScreen({ onLogout }) {
+     }
+   };
+ 
+-  const addComment = (id, text) =>
+-    setPosts((prev) =>
+-      prev.map((p) =>
+-        p.id === id
+-          ? {
+-              ...p,
+-              comments: [
+-                ...p.comments,
+-                { id: Date.now(), user: profile.name, mine: true, text },
+-              ],
+-            }
+-          : p,
+-      ),
+-    );
++  // ---------- คอมเมนต์ (บันทึกลง Supabase ตาราง comments) ----------
++  const addComment = async (id, text) => {
++    if (!userId) return;
++    const tempId = "tmp-" + Date.now();
++    const patchComments = (fn) =>
++      setPosts((prev) =>
++        prev.map((p) => (p.id === id ? { ...p, comments: fn(p.comments) } : p)),
++      );
++    // แสดงทันที แล้วค่อยบันทึก
++    patchComments((cs) => [
++      ...cs,
++      { id: tempId, user: profile.name, mine: true, text },
++    ]);
++    try {
++      const realId = await addCommentInDB(id, userId, text);
++      patchComments((cs) =>
++        cs.map((c) => (c.id === tempId ? { ...c, id: realId } : c)),
++      );
++    } catch (error) {
++      console.log("ส่งคอมเมนต์ไม่สำเร็จ:", error);
++      patchComments((cs) => cs.filter((c) => c.id !== tempId));
++      alert("ส่งคอมเมนต์ไม่สำเร็จ: " + (error?.message || "โปรดลองอีกครั้ง"));
++    }
++  };
+ 
+   // ชื่อ/รูปของเราอัปเดตตามโปรไฟล์ทุกที่ (โพสต์และคอมเมนต์ของเรา)
+   const viewPosts = useMemo(
+@@ -458,15 +439,43 @@ export default function MainScreen({ onLogout }) {
+ 
+   // ---------- แจ้งเตือน ----------
+   const unreadCount = notifications.filter((n) => !n.read).length;
+-  const readAll = () =>
++  const readAll = () => {
+     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
++    if (userId)
++      markAllNotificationsRead(userId).catch((e) =>
++        console.log("อ่านทั้งหมดไม่สำเร็จ:", e?.message),
++      );
++  };
+   const openNotification = (n) => {
+     setNotifications((prev) =>
+       prev.map((x) => (x.id === n.id ? { ...x, read: true } : x)),
+     );
++    if (!n.read)
++      markNotificationRead(n.id).catch((e) =>
++        console.log("อ่านแจ้งเตือนไม่สำเร็จ:", e?.message),
++      );
+     if (n.postId) push("postDetail", { postId: n.postId });
+   };
+ 
++  // โหลดแจ้งเตือนจริงจาก Supabase: ตอนเข้าแอป, ทุก 30 วินาที และตอนเปิดหน้าแจ้งเตือน
++  const refreshNotifications = async () => {
++    if (!userId) return;
++    try {
++      setNotifications(await fetchNotifications(userId));
++    } catch (e) {
++      console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message);
++    }
++  };
++  useEffect(() => {
++    if (!userId) return undefined;
++    refreshNotifications();
++    const timer = setInterval(refreshNotifications, 30000);
++    return () => clearInterval(timer);
++  }, [userId]);
++  useEffect(() => {
++    if (top && top.name === "notifications") refreshNotifications();
++  }, [top && top.name]);
++
+   // ---------- โปรไฟล์ ----------
+   const saveProfile = (patch) => setProfile((prev) => ({ ...prev, ...patch }));
+ 
+diff --git a/screens/NotificationsScreen.js b/screens/NotificationsScreen.js
+index 1121371..3d33540 100644
+--- a/screens/NotificationsScreen.js
++++ b/screens/NotificationsScreen.js
+@@ -9,6 +9,7 @@ const ICONS = {
+   menu: 'restaurant-outline',
+   follow: 'person-add-outline',
+   reply: 'chatbubble-outline',
++  comment: 'chatbubble-outline',
+   like: 'heart-outline',
+   system: 'flame-outline',
+ };

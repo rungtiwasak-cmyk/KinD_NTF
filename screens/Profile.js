@@ -9,6 +9,7 @@ import {
   ImageBackground,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Avatar from '../components/Avatar';
 
 // สีอ้างอิงจากหน้า Login / Register / Home ของแอพ
 const COLORS = {
@@ -72,7 +73,7 @@ export default function ProfileScreen({
         {/* ส่วนหัวสีส้ม */}
         <View style={styles.header}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarEmoji}>{profile.avatar}</Text>
+            <Avatar emoji={profile.avatar} uri={profile.avatarUrl} fontSize={48} />
           </View>
           <Text style={styles.name}>{profile.name}</Text>
           {profile.email ? <Text style={styles.email}>{profile.email}</Text> : null}
@@ -217,6 +218,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 4,
     borderColor: 'rgba(255,255,255,0.6)',
+    overflow: 'hidden',
   },
   avatarEmoji: { fontSize: 48 },
   name: { marginTop: 12, fontSize: 22, fontWeight: '800', color: '#FFFFFF' },
