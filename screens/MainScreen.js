@@ -464,23 +464,37 @@ export default function MainScreen({ onLogout }) {
   };
 
   // โหลดแจ้งเตือนจริงจาก Supabase: ตอนเข้าแอป, ทุก 30 วินาที และตอนเปิดหน้าแจ้งเตือน
-  const refreshNotifications = async () => {
-    if (!userId) return;
-    try {
-      setNotifications(await fetchNotifications(userId));
-    } catch (e) {
-      console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message);
-    }
-  };
   useEffect(() => {
     if (!userId) return undefined;
-    refreshNotifications();
-    const timer = setInterval(refreshNotifications, 30000);
-    return () => clearInterval(timer);
+    let isMounted = true;
+    fetchNotifications(userId)
+      .then((data) => {
+        if (isMounted) setNotifications(data);
+      })
+      .catch((e) => console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message));
+
+    const timer = setInterval(() => {
+      fetchNotifications(userId)
+        .then((data) => {
+          if (isMounted) setNotifications(data);
+        })
+        .catch((e) => console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message));
+    }, 30000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+    };
   }, [userId]);
+
+  const activeTopName = top ? top.name : null;
   useEffect(() => {
-    if (top && top.name === "notifications") refreshNotifications();
-  }, [top && top.name]);
+    if (activeTopName === "notifications" && userId) {
+      fetchNotifications(userId)
+        .then(setNotifications)
+        .catch((e) => console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message));
+    }
+  }, [activeTopName, userId]);
 
   // ---------- โปรไฟล์ ----------
   const saveProfile = (patch) => setProfile((prev) => ({ ...prev, ...patch }));

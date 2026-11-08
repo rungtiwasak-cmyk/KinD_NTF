@@ -1,6 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import * as WebBrowser from "expo-web-browser";
 import {
+  ActivityIndicator,
   Alert,
   Image,
   ImageBackground,
@@ -12,7 +14,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loginUser } from "../lib/api";
+import { loginUser, loginWithOAuth } from "../lib/api";
 import { colors } from "../theme";
 
 const BG = require("../assets/bg.png");
@@ -22,6 +24,45 @@ export default function LoginScreen({ onLogin, onRegister, onForgot }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
+  const [loadingSocial, setLoadingSocial] = useState(null); // 'google' | 'apple' | null
+
+  useEffect(() => {
+    WebBrowser.warmUpAsync();
+    return () => {
+      WebBrowser.coolDownAsync();
+    };
+  }, []);
+
+  const handleSocialLogin = async (provider) => {
+    if (loadingSocial) return;
+    setLoadingSocial(provider);
+    try {
+      const session = await loginWithOAuth(provider);
+      if (session && onLogin) {
+        onLogin();
+      }
+    } catch (error) {
+      console.log(`${provider} login error:`, error?.message);
+      const msg = error?.message || "";
+      if (
+        msg.toLowerCase().includes("provider is not enabled") ||
+        msg.toLowerCase().includes("not enabled") ||
+        msg.toLowerCase().includes("unsupported provider")
+      ) {
+        Alert.alert(
+          "ยังไม่ได้เปิดใช้งาน Provider ใน Supabase",
+          `ระบบ Supabase ยังไม่ได้เปิดใช้งาน ${provider === "google" ? "Google" : "Apple"} Login\n\nสามารถเปิดใช้งานได้ที่ Supabase Dashboard > Authentication > Providers`
+        );
+      } else {
+        Alert.alert(
+          "เข้าสู่ระบบไม่สำเร็จ",
+          `ไม่สามารถเข้าสู่ระบบผ่าน ${provider === "google" ? "Google" : "Apple"} ได้: ${error?.message || "กรุณาลองใหม่อีกครั้ง"}`
+        );
+      }
+    } finally {
+      setLoadingSocial(null);
+    }
+  };
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -106,13 +147,19 @@ export default function LoginScreen({ onLogin, onRegister, onForgot }) {
             </View>
 
             <View style={styles.socialRow}>
-              <TouchableOpacity style={styles.socialBtn}>
-                <Ionicons name="logo-google" size={18} color="#DB4437" />
-                <Text style={styles.socialText}> Google</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.socialBtn}>
-                <Ionicons name="logo-apple" size={18} color="#000" />
-                <Text style={styles.socialText}> Apple</Text>
+              <TouchableOpacity
+                style={[styles.socialBtn, loadingSocial === "google" && { opacity: 0.7 }]}
+                onPress={() => handleSocialLogin("google")}
+                disabled={loadingSocial !== null}
+              >
+                {loadingSocial === "google" ? (
+                  <ActivityIndicator size="small" color="#DB4437" />
+                ) : (
+                  <>
+                    <Ionicons name="logo-google" size={18} color="#DB4437" />
+                    <Text style={styles.socialText}> เข้าสู่ระบบด้วย Google</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
           </View>
