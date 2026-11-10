@@ -1,0 +1,122 @@
+diff --git a/lib/api.js b/lib/api.js
+index 6b72c42..e03a5c1 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -1,4 +1,5 @@
+ import { decode } from "base64-arraybuffer";
++import Constants, { ExecutionEnvironment } from "expo-constants";
+ import * as Linking from "expo-linking";
+ import * as WebBrowser from "expo-web-browser";
+ import { Platform } from "react-native";
+@@ -6,6 +7,7 @@ import { supabase } from "./supabase";
+ 
+ WebBrowser.maybeCompleteAuthSession();
+ 
++const OAUTH_TIMEOUT_MS = 120000; // รอล็อกอิน Google สูงสุด 2 นาที
+ const BUCKET = "post-media";
+ const VIDEO_EXT = ["mp4", "mov", "m4v", "webm", "3gp", "avi"];
+ 
+@@ -250,17 +252,32 @@ export async function syncOAuthUser(user) {
+         user.user_metadata?.picture ||
+         null;
+ 
+-      await supabase.from("users").insert({
++      const { error: insertError } = await supabase.from("users").insert({
+         user_id: user.id,
+         username,
+         avatar_url,
+       });
++      // ก่อนหน้านี้ error ตรงนี้ถูกกลืนหายไปเงียบๆ (มักเกิดจาก RLS ไม่อนุญาต INSERT ตาราง users)
++      if (insertError) {
++        console.log("สร้างโปรไฟล์ Google ในตาราง users ไม่สำเร็จ:", insertError.message);
++      }
+     }
+   } catch (err) {
+     console.log("Sync OAuth user error:", err?.message);
+   }
+ }
+ 
++// ลิงก์ที่ให้ Supabase เด้งกลับเข้าแอปหลังล็อกอิน
++// - Expo Go: ต้องเป็น exp://<IP เครื่อง>:8081/--/... (Expo Go เปิดได้เฉพาะ exp:// ไม่รู้จัก myapp://)
++// - แอปที่ build เอง (dev build/ใช้งานจริง): ใช้ scheme "myapp://auth/callback"
++// หมายเหตุ: ไม่ใช้ "myapp:///" (ไม่มี path) เพราะ allowlist ของ Supabase จับคู่ไม่ติด
++function getOAuthRedirectUrl() {
++  const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
++  const hostUri = Constants.expoConfig?.hostUri;
++  if (isExpoGo && hostUri) return `exp://${hostUri}/--/auth/callback`;
++  return Linking.createURL("auth/callback");
++}
++
+ // ฟังก์ชันเข้าสู่ระบบด้วย Google หรือ Apple ผ่าน Supabase OAuth
+ export async function loginWithOAuth(provider) {
+   if (Platform.OS === "web") {
+@@ -271,10 +288,10 @@ export async function loginWithOAuth(provider) {
+       },
+     });
+     if (error) throw error;
+-    return data;
++    return null; // บนเว็บเบราว์เซอร์จะ redirect ไปหน้า Google เอง ยังไม่ถือว่าล็อกอินสำเร็จ
+   }
+ 
+-  const redirectUrl = Linking.createURL("/");
++  const redirectUrl = getOAuthRedirectUrl();
+   console.log("OAuth Redirect URL ที่ส่งไป Supabase:", redirectUrl);
+   const { data, error } = await supabase.auth.signInWithOAuth({
+     provider,
+@@ -287,11 +304,41 @@ export async function loginWithOAuth(provider) {
+   if (error) throw error;
+   if (!data?.url) throw new Error("ไม่พบ URL สำหรับเข้าสู่ระบบ");
+ 
+-  const res = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
++  // กันค้างไม่รู้จบ: ถ้า Supabase redirect กลับแอปไม่ได้ (Redirect URL ไม่อยู่ใน allowlist)
++  // หน้าเบราว์เซอร์จะโหลดค้าง และ openAuthSessionAsync จะไม่ resolve สักที
++  let timer;
++  const timeout = new Promise((_, reject) => {
++    timer = setTimeout(
++      () =>
++        reject(
++          new Error(
++            "รอการเข้าสู่ระบบนานเกินไป — Supabase น่าจะ redirect กลับแอปไม่ได้ " +
++              `ให้เพิ่ม Redirect URL นี้ใน Supabase: ${redirectUrl} (หรือ exp://** )`,
++          ),
++        ),
++      OAUTH_TIMEOUT_MS,
++    );
++  });
++  let res;
++  try {
++    res = await Promise.race([
++      WebBrowser.openAuthSessionAsync(data.url, redirectUrl),
++      timeout,
++    ]);
++  } finally {
++    clearTimeout(timer);
++  }
++  console.log("OAuth ผลลัพธ์จากเบราว์เซอร์:", res.type, res.url || "");
+ 
+   if (res.type === "success" && res.url) {
+     const url = res.url;
+ 
++    // 0. ถ้า Supabase/Google ส่ง error กลับมา (เช่น "Database error saving new user") ให้แสดงจริง
++    const errMatch = /[?&#](?:error_description|error)=([^&#]+)/.exec(url);
++    if (errMatch) {
++      throw new Error(decodeURIComponent(errMatch[1].replace(/\+/g, " ")));
++    }
++
+     // 1. ดึง authorization code (PKCE flow) ก่อน ซึ่งเป็นมาตรฐานหลัก
+     let code = null;
+     const parsed = Linking.parse(url);
+@@ -340,10 +387,11 @@ export async function loginWithOAuth(provider) {
+   }
+ 
+   if (res.type === "cancel" || res.type === "dismiss") {
+-    return null;
++    return null; // ผู้ใช้ปิดหน้า/ยกเลิกเอง
+   }
+ 
+-  return null;
++  // เด้งกลับแอปได้ แต่ไม่มี code/token มาด้วย
++  throw new Error("ไม่ได้รับข้อมูลเข้าสู่ระบบจาก Google กลับมา โปรดลองอีกครั้ง");
+ }
+ 
+ 
