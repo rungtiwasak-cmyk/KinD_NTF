@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { colors } from '../theme';
 import { matchPosts } from '../data/posts';
+import { findRestrictionHits } from '../data/profileOptions';
 import { nutriText } from '../utils';
 import {
   isGeminiConfigured,
@@ -37,6 +38,9 @@ const QUICK = [
 
 export default function ScanScreen({
   posts = [],
+  restrictions = [], // แพ้อาหาร/ข้อจำกัดอาหารของผู้ใช้ (จากโปรไฟล์)
+  userGroup = null,
+  healthGoal = null,
   initialPrompt = '',
   onSaveScan,
   onOpenPost,
@@ -172,6 +176,9 @@ export default function ScanScreen({
           mimeType: media?.mimeType || 'image/jpeg',
           manualIngredients: all,
           prompt,
+          restrictions,
+          userGroup,
+          healthGoal,
         });
       }
 
@@ -180,13 +187,31 @@ export default function ScanScreen({
         new Set([...(aiData.detected_ingredients || []), ...all])
       );
 
-      // จับคู่กับโพสต์ที่มีในแอป
-      const matches = matchPosts(posts, detected, prompt);
+      // กันซ้ำอีกชั้น: ตัดเมนู/โพสต์ที่มีส่วนผสมตรงกับอาหารที่ผู้ใช้แพ้หรือไม่กิน
+      // (นอกเหนือจากที่สั่งให้ AI เลี่ยงไว้ในคำสั่งแล้ว)
+      const allMenus = aiData.suggested_menus || [];
+      const aiMenus = allMenus.filter(
+        (m) =>
+          findRestrictionHits(
+            {
+              title: m.title,
+              ingredients: [...(m.used_ingredients || []), ...(m.missing_ingredients || [])],
+            },
+            restrictions
+          ).length === 0
+      );
+      const allMatches = matchPosts(posts, detected, prompt);
+      const matches = allMatches.filter(
+        (m) => findRestrictionHits(m.post, restrictions).length === 0
+      );
+      const filteredCount =
+        allMenus.length - aiMenus.length + (allMatches.length - matches.length);
 
       const finalResult = {
         detected,
-        aiMenus: aiData.suggested_menus || [],
+        aiMenus,
         matches,
+        filteredCount,
         isDemo: isDemoResult,
       };
 
@@ -195,7 +220,7 @@ export default function ScanScreen({
       // บันทึกลงประวัติการสแกน
       if (onSaveScan) {
         const savedMenus = [
-          ...(aiData.suggested_menus || []).map((m) => `[AI] ${m.title}`),
+          ...aiMenus.map((m) => `[AI] ${m.title}`),
           ...matches.slice(0, 3).map((m) => m.post.title || m.post.caption),
         ];
         onSaveScan({
@@ -393,6 +418,15 @@ export default function ScanScreen({
                   <Ionicons name="information-circle-outline" size={20} color="#8D6E63" />
                   <Text style={styles.noteText}>
                     ผลลัพธ์นี้ทำงานใน <Text style={{ fontWeight: 'bold' }}>Demo Mode</Text> (ข้อมูลจำลอง) เพื่อเชื่อมต่อ AI จริง ให้ใส่ Gemini API Key ฟรี ในไฟล์ <Text style={{ fontFamily: 'monospace' }}>.env</Text>
+                  </Text>
+                </View>
+              )}
+
+              {result.filteredCount > 0 && (
+                <View style={styles.note}>
+                  <Ionicons name="shield-checkmark-outline" size={20} color="#8D6E63" />
+                  <Text style={styles.noteText}>
+                    ซ่อน {result.filteredCount} เมนูที่มีส่วนผสมตรงกับอาหารที่คุณแพ้/ไม่กิน ({restrictions.join(', ')})
                   </Text>
                 </View>
               )}

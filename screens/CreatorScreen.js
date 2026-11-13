@@ -45,6 +45,7 @@ export default function CreatorScreen({
                 <Avatar emoji={creator.emoji} uri={creator.avatarUrl} fontSize={44} />
               </View>
               <Text style={styles.name}>{creator.name}</Text>
+              {creator.bio ? <Text style={styles.bio}>{creator.bio}</Text> : null}
 
               <View style={styles.stats}>
                 <View style={styles.stat}>
@@ -123,6 +124,7 @@ const styles = StyleSheet.create({
   profile: { backgroundColor: '#fff', borderRadius: 24, padding: 18, alignItems: 'center' },
   avatar: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#FFE0B2', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   name: { fontSize: 20, fontWeight: 'bold', color: colors.text, marginTop: 10 },
+  bio: { fontSize: 13, color: colors.text, opacity: 0.8, textAlign: 'center', marginTop: 6, marginHorizontal: 24, lineHeight: 19 },
   handle: { color: colors.muted, fontSize: 13, marginTop: 2 },
   focus: { color: colors.primary, fontSize: 13, marginTop: 6 },
 

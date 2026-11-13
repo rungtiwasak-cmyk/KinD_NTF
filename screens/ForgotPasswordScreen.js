@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { sendPasswordReset } from '../lib/api';
 import {
   View,
   Text,
@@ -17,8 +18,9 @@ export default function ForgotPasswordScreen({ onBack }) {
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [sent, setSent] = useState(false); // false = กรอกอีเมล, true = ส่งลิงก์แล้ว
+  const [sending, setSending] = useState(false);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const value = email.trim();
     if (!value) {
       setError('กรุณากรอกอีเมล');
@@ -29,9 +31,16 @@ export default function ForgotPasswordScreen({ onBack }) {
       return;
     }
     setError('');
-    // TODO: เชื่อมต่อ backend ตรงนี้ เช่น
-    // await sendPasswordResetEmail(auth, value)  (Firebase)
-    setSent(true);
+    setSending(true);
+    try {
+      await sendPasswordReset(value); // ส่งอีเมลรีเซ็ตรหัสผ่านจริงผ่าน Supabase
+      setSent(true);
+    } catch (err) {
+      console.log('ส่งอีเมลรีเซ็ตรหัสผ่านไม่สำเร็จ:', err);
+      setError('ส่งอีเมลไม่สำเร็จ: ' + (err?.message || 'โปรดลองอีกครั้ง'));
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -82,8 +91,8 @@ export default function ForgotPasswordScreen({ onBack }) {
                 </View>
                 {!!error && <Text style={styles.errorText}>{error}</Text>}
 
-                <TouchableOpacity style={styles.btn} onPress={handleSend}>
-                  <Text style={styles.btnText}>ส่งลิงก์รีเซ็ตรหัสผ่าน</Text>
+                <TouchableOpacity style={styles.btn} onPress={handleSend} disabled={sending}>
+                  <Text style={styles.btnText}>{sending ? 'กำลังส่ง...' : 'ส่งลิงก์รีเซ็ตรหัสผ่าน'}</Text>
                 </TouchableOpacity>
               </>
             ) : (

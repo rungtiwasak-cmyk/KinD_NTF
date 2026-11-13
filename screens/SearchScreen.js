@@ -46,7 +46,7 @@ function CreatorCard({ item, isFollowing, onToggleFollow, onPress }) {
   return (
     <TouchableOpacity style={styles.creatorCard} activeOpacity={0.85} onPress={onPress}>
       <View style={styles.creatorAvatar}>
-        <Avatar emoji="🧑‍🍳" uri={item.avatarUrl} fontSize={30} />
+        <Avatar emoji={item.emoji || "🧑‍🍳"} uri={item.avatarUrl} fontSize={30} />
       </View>
       <Text style={styles.creatorName} numberOfLines={1}>
         {item.name}

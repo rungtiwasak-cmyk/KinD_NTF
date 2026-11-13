@@ -74,7 +74,25 @@ export default function RegisterScreen({ onBack, onRegister }) {
 
     try {
       Alert.alert("กำลังสมัครสมาชิก", "กรุณารอสักครู่...");
-      await registerUser(email, password, name);
+      // ข้อจำกัดอาหาร: ตัด "อื่นๆ" ออก แล้วเติมข้อความที่พิมพ์เองเข้าไป
+      const allergies = restrictions.filter((r) => r !== "อื่นๆ");
+      if (otherText.trim()) allergies.push(otherText.trim());
+
+      const result = await registerUser(email, password, name, {
+        group,
+        healthGoal: goal,
+        allergies,
+      });
+
+      if (!result?.session) {
+        // Supabase เปิดให้ยืนยันอีเมลก่อน ยังเข้าแอปไม่ได้จนกว่าจะกดลิงก์ในอีเมล
+        Alert.alert(
+          "สมัครสมาชิกเรียบร้อย",
+          "เราส่งลิงก์ยืนยันไปที่อีเมลของคุณแล้ว กรุณายืนยันอีเมลก่อน แล้วกลับมาเข้าสู่ระบบ",
+          [{ text: "ตกลง", onPress: () => onBack && onBack() }],
+        );
+        return;
+      }
 
       Alert.alert("สำเร็จ", "สมัครสมาชิกเรียบร้อยแล้ว!", [
         {

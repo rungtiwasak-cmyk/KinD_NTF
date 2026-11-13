@@ -114,6 +114,9 @@ export default function PostCard({ post, onToggleLike, onAddComment, favApi, def
       {post.title ? <Text style={styles.title}>{post.title}</Text> : null}
       <Text style={[styles.caption, post.title ? { marginTop: 4 } : null]}>{post.caption}</Text>
       {nutriText(post) ? <Text style={styles.nutri}>{nutriText(post)}</Text> : null}
+      {post.restrictionHits && post.restrictionHits.length > 0 ? (
+        <Text style={styles.warn}>⚠️ มีส่วนผสมที่คุณแพ้/ไม่กิน: {post.restrictionHits.join(', ')}</Text>
+      ) : null}
 
       <View style={styles.actionBar}>
         <TouchableOpacity style={styles.actionItem} onPress={() => onToggleLike(post.id)}>
@@ -199,6 +202,7 @@ const styles = StyleSheet.create({
   title: { color: colors.text, marginTop: 10, fontSize: 17, fontWeight: 'bold' },
   caption: { color: colors.text, marginTop: 10, fontSize: 14 },
   nutri: { color: colors.muted, fontSize: 12, marginTop: 4 },
+  warn: { color: '#E53935', fontSize: 12, fontWeight: 'bold', marginTop: 4 },
   actionBar: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
   actionItem: { flexDirection: 'row', alignItems: 'center', marginRight: 14 },
   actionCount: { marginLeft: 4, color: colors.text, fontSize: 12 },

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   BackHandler,
   KeyboardAvoidingView,
   Platform,
@@ -17,18 +18,23 @@ import {
   fetchCreators,
   fetchFavorites,
   fetchFollows,
+  fetchMyProfile,
   fetchNotifications,
   fetchPosts,
   followUser,
   likePost,
+  mapProfileRow,
   markAllNotificationsRead,
   markNotificationRead,
   removeFavorite,
   saveFavorite,
+  saveMyProfile,
+  signOutUser,
   unfollowUser,
   unlikePost,
   uploadAvatar,
 } from "../lib/api";
+import { findRestrictionHits } from "../data/profileOptions";
 import { supabase } from "../lib/supabase";
 import { colors } from "../theme";
 
@@ -46,38 +52,23 @@ import MyPostsScreen from "./MyPostsScreen";
 import NotificationsScreen from "./NotificationsScreen";
 import PostDetailScreen from "./PostDetailScreen";
 import ScanHistoryScreen from "./ScanHistoryScreen";
+import OnboardingScreen from "./OnboardingScreen";
 import ScanScreen from "./ScanScreen";
 
-const DAY = 86400000;
 const EATEN_TODAY = 1400; // ข้อมูลจำลอง (ยังไม่มีระบบบันทึกมื้ออาหาร)
 
+// ค่าเริ่มต้นก่อนโหลดโปรไฟล์จริงจาก Supabase (ไม่ใช้ข้อมูลตัวอย่างปลอมอีกต่อไป)
 const INITIAL_PROFILE = {
-  name: "รุ่งทิวา",
-  email: "rungtiwa@example.com",
+  name: "",
+  email: "",
   avatar: "👩",
   avatarUrl: null, // รูปโปรไฟล์ที่ผู้ใช้อัปโหลดเอง (ถ้าไม่มีใช้อีโมจิ)
-  group: "นักศึกษาหอพัก",
+  bio: "",
+  group: null,
   calorieGoal: 2000,
   healthGoal: null,
-  allergies: ["กุ้ง", "ถั่วลิสง"],
+  allergies: [],
 };
-
-const SAMPLE_SCANS = [
-  {
-    id: 1,
-    at: Date.now() - 1 * DAY,
-    prompt: "healthy",
-    ingredients: ["อกไก่", "บรอกโคลี", "ไข่"],
-    menus: ["อกไก่ย่างซอสส้ม", "ไข่ตุ๋นบรอกโคลี"],
-  },
-  {
-    id: 2,
-    at: Date.now() - 4 * DAY,
-    prompt: "",
-    ingredients: ["แซลมอน", "มะเขือเทศ"],
-    menus: ["แซลมอนอบผัก"],
-  },
-];
 
 export default function MainScreen({ onLogout }) {
   const [tab, setTab] = useState("home");
@@ -86,8 +77,10 @@ export default function MainScreen({ onLogout }) {
   const [posts, setPosts] = useState([]);
   const [profile, setProfile] = useState(INITIAL_PROFILE);
   const [notifications, setNotifications] = useState([]);
-  const [scanHistory, setScanHistory] = useState(SAMPLE_SCANS);
+  const [scanHistory, setScanHistory] = useState([]);
   const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
+  const [profileLoaded, setProfileLoaded] = useState(false); // โหลดโปรไฟล์จาก DB เสร็จแล้วหรือยัง
+  const [needsOnboarding, setNeedsOnboarding] = useState(false); // ยังไม่เคยตั้งค่าโปรไฟล์ครั้งแรก
   const [creators, setCreators] = useState([]); // ผู้ใช้ทั้งหมดจาก Supabase
   const [follows, setFollows] = useState([]); // [{ follower_id, following_id }]
   const [collections, setCollections] = useState([]); // กลุ่ม Favorite
@@ -161,23 +154,19 @@ export default function MainScreen({ onLogout }) {
           loadExtras(user.id); // ติดตาม / Favorite / รายชื่อ creator (ไม่รอ ไม่ให้ขวางการโหลดโพสต์)
 
           // 2. ดึงข้อมูลโปรไฟล์จริงจากตาราง users โดยใช้ user_id
-          const { data: profileData, error: profileError } = await supabase
-            .from("users")
-            .select("*")
-            .eq("user_id", user.id)
-            .single();
-
-          if (!profileError && profileData && !cancelled) {
-            // อัปเดตข้อมูลโปรไฟล์ด้วยข้อมูลจริงจากฐานข้อมูล
-            setProfile((prev) => ({
-              ...prev,
-              name: profileData.username || prev.name,
-              email: user.email,
-              avatarUrl: profileData.avatar_url || null,
-              group: profileData.user_groups?.[0] || prev.group,
-              healthGoal: profileData.usage_goals?.[0] || prev.healthGoal,
-              allergies: profileData.dietary_restrictions || prev.allergies,
-            }));
+          try {
+            const row = await fetchMyProfile(user.id);
+            if (!cancelled) {
+              setProfile(mapProfileRow(row, user));
+              // ยังไม่เคยเลือกกลุ่มผู้ใช้ = ยังไม่เคยตั้งค่าโปรไฟล์ -> ไปหน้าตั้งค่าครั้งแรก
+              setNeedsOnboarding(
+                !(Array.isArray(row?.user_groups) && row.user_groups.length > 0),
+              );
+            }
+          } catch (profileError) {
+            // โหลดไม่สำเร็จ (เช่นเน็ตหลุด) ไม่บังคับ onboarding เพื่อไม่ให้ทับข้อมูลเดิม
+            console.log("โหลดโปรไฟล์ไม่สำเร็จ:", profileError?.message);
+            if (!cancelled) setProfile(mapProfileRow(null, user));
           }
         }
 
@@ -189,6 +178,8 @@ export default function MainScreen({ onLogout }) {
         }
       } catch (error) {
         console.log("โหลดข้อมูลไม่สำเร็จ:", error.message);
+      } finally {
+        if (!cancelled) setProfileLoaded(true);
       }
     };
 
@@ -352,7 +343,11 @@ export default function MainScreen({ onLogout }) {
               comments,
             }
           : { ...p, comments };
-      }),
+      }).map((p) => ({
+        ...p,
+        // ส่วนผสมที่ตรงกับอาหารที่ผู้ใช้แพ้/ไม่กิน (ใช้แสดงคำเตือนบนโพสต์)
+        restrictionHits: findRestrictionHits(p, profile.allergies),
+      })),
     [posts, profile],
   );
   const myPosts = viewPosts.filter((p) => p.mine);
@@ -496,28 +491,65 @@ export default function MainScreen({ onLogout }) {
     }
   }, [activeTopName, userId]);
 
-  // ---------- โปรไฟล์ ----------
+  // ---------- โปรไฟล์ (บันทึกลง Supabase ตาราง users) ----------
   const saveProfile = (patch) => setProfile((prev) => ({ ...prev, ...patch }));
+
+  const requireUserId = async () => {
+    if (userId) return userId;
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) throw new Error("กรุณาล็อกอินก่อน");
+    return user.id;
+  };
 
   // บันทึกหน้าแก้ไขโปรไฟล์ (รวมอัปโหลดรูปโปรไฟล์ที่เลือกจากเครื่อง)
   // avatarPick = { uri, mimeType, base64 } ถ้าเลือกรูปใหม่ / "clear" ถ้ากลับไปใช้อีโมจิ / null ถ้าไม่เปลี่ยน
   const saveEditedProfile = async ({ avatarPick, ...patch }) => {
+    const uid = await requireUserId();
     if (avatarPick) {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("กรุณาล็อกอินก่อน");
       if (avatarPick === "clear") {
-        await clearAvatar(user.id);
+        await clearAvatar(uid);
         patch.avatarUrl = null;
       } else {
-        patch.avatarUrl = await uploadAvatar(
-          { ...avatarPick, type: "image" },
-          user.id,
-        );
+        patch.avatarUrl = await uploadAvatar({ ...avatarPick, type: "image" }, uid);
       }
     }
+    await saveMyProfile(uid, {
+      name: patch.name,
+      bio: patch.bio,
+      group: patch.group,
+      allergies: patch.allergies,
+      avatar: patch.avatar,
+    });
     saveProfile(patch);
+  };
+
+  // บันทึกเป้าหมายแคลอรี่ / เป้าหมายสุขภาพ
+  const saveGoal = async (patch) => {
+    const uid = await requireUserId();
+    await saveMyProfile(uid, {
+      calorieGoal: patch.calorieGoal,
+      healthGoal: patch.healthGoal ?? null,
+    });
+    saveProfile(patch);
+  };
+
+  // จบหน้าตั้งค่าโปรไฟล์ครั้งแรก
+  const finishOnboarding = async (patch) => {
+    const uid = await requireUserId();
+    await saveMyProfile(uid, {
+      ...(profile.name ? { name: profile.name } : {}),
+      ...patch,
+    });
+    saveProfile(patch);
+    setNeedsOnboarding(false);
+  };
+
+  // ออกจากระบบจริง (ล้าง session ใน Supabase) แล้วกลับไปหน้า Login
+  const handleLogout = async () => {
+    await signOutUser();
+    if (onLogout) onLogout();
   };
 
   // ---------- หน้าที่เปิดทับแท็บ ----------
@@ -537,6 +569,9 @@ export default function MainScreen({ onLogout }) {
         return (
           <ScanScreen
             posts={viewPosts}
+            restrictions={profile.allergies}
+            userGroup={profile.group}
+            healthGoal={profile.healthGoal}
             initialPrompt={top.params.prompt}
             onSaveScan={addScan}
             onOpenPost={(id) => push("postDetail", { postId: id })}
@@ -564,7 +599,7 @@ export default function MainScreen({ onLogout }) {
             ? { id: cid, name: fromPost.author, avatarUrl: fromPost.avatarUrl }
             : null);
         const creator = base
-          ? { ...base, followers: followerCount(cid), emoji: "🧑‍🍳" }
+          ? { ...base, followers: followerCount(cid), emoji: base.emoji || "🧑‍🍳" }
           : null;
         return (
           <CreatorScreen
@@ -618,7 +653,7 @@ export default function MainScreen({ onLogout }) {
           <GoalScreen
             profile={profile}
             eaten={EATEN_TODAY}
-            onSave={saveProfile}
+            onSave={saveGoal}
             onBack={pop}
           />
         );
@@ -636,6 +671,34 @@ export default function MainScreen({ onLogout }) {
         return null;
     }
   };
+
+  // รอโหลดโปรไฟล์จริงก่อน จะได้ไม่เห็นข้อมูลปลอมวาบขึ้นมา
+  if (!profileLoaded) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: colors.bg,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  // ล็อกอินครั้งแรก (เช่น Google) ให้ตั้งค่าโปรไฟล์ก่อนเข้าหน้าแรก
+  if (needsOnboarding) {
+    return (
+      <KeyboardAvoidingView
+        style={{ flex: 1, backgroundColor: colors.bg }}
+        behavior="padding"
+      >
+        <OnboardingScreen name={profile.name} onDone={finishOnboarding} />
+      </KeyboardAvoidingView>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -681,7 +744,7 @@ export default function MainScreen({ onLogout }) {
           <Profile
             profile={profile}
             postCount={myPosts.length}
-            onLogout={onLogout}
+            onLogout={handleLogout}
             onEditProfile={() => push("editProfile")}
             onOpenMyPosts={() => push("myPosts")}
             onOpenFavorites={() => push("favorites")}

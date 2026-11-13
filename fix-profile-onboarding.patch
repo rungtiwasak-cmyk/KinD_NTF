@@ -1,0 +1,1191 @@
+From 5ae6558e6dcd77c4137fd1ee82907cd44794de5c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 14:50:22 +0700
+Subject: [PATCH] Onboarding, profile DB, logout, session, restrictions in scan
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01T6RCBwWvYEVom7cZFqwsRi
+---
+ App.js                          |  25 ++++-
+ components/PostCard.js          |   4 +
+ data/profileOptions.js          |  37 +++++++
+ lib/api.js                      | 110 +++++++++++++++++--
+ lib/gemini.js                   |  12 ++
+ screens/CreatorScreen.js        |   2 +
+ screens/EditProfileScreen.js    |  30 ++---
+ screens/ForgotPasswordScreen.js |  21 +++-
+ screens/GoalScreen.js           |  24 +++-
+ screens/MainScreen.js           | 171 ++++++++++++++++++++---------
+ screens/OnboardingScreen.js     | 189 ++++++++++++++++++++++++++++++++
+ screens/Profile.js              |  12 +-
+ screens/RegisterScreen.js       |  20 +++-
+ screens/ScanScreen.js           |  42 ++++++-
+ screens/SearchScreen.js         |   2 +-
+ 15 files changed, 605 insertions(+), 96 deletions(-)
+ create mode 100644 data/profileOptions.js
+ create mode 100644 screens/OnboardingScreen.js
+
+diff --git a/App.js b/App.js
+index 337a059..f12821e 100644
+--- a/App.js
++++ b/App.js
+@@ -1,13 +1,34 @@
+ 
+-import React, { useState } from 'react';
++import React, { useState, useEffect } from 'react';
++import { View, ActivityIndicator } from 'react-native';
+ import LoginScreen from './screens/LoginScreen';
+ import RegisterScreen from './screens/RegisterScreen';
+ import MainScreen from './screens/MainScreen';
+ import ForgotPasswordScreen from './screens/ForgotPasswordScreen';   // เพิ่มบรรทัดนี้
+ import { SafeAreaProvider } from 'react-native-safe-area-context';
++import { getCurrentSession } from './lib/api';
+ 
+ function AppContent() {
+-  const [screen, setScreen] = useState('login');
++  const [screen, setScreen] = useState('loading');
++
++  // เปิดแอปมา: ถ้ายังมี session ค้างอยู่ (เคยล็อกอินไว้) เข้าหน้าหลักเลย ไม่ต้องล็อกอินใหม่
++  useEffect(() => {
++    let alive = true;
++    getCurrentSession()
++      .then((session) => alive && setScreen(session ? 'home' : 'login'))
++      .catch(() => alive && setScreen('login'));
++    return () => {
++      alive = false;
++    };
++  }, []);
++
++  if (screen === 'loading') {
++    return (
++      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1E0' }}>
++        <ActivityIndicator size="large" color="#F9511E" />
++      </View>
++    );
++  }
+ 
+   if (screen === 'login') {
+     return (
+diff --git a/components/PostCard.js b/components/PostCard.js
+index 1fe323e..8df19ac 100644
+--- a/components/PostCard.js
++++ b/components/PostCard.js
+@@ -114,6 +114,9 @@ export default function PostCard({ post, onToggleLike, onAddComment, favApi, def
+       {post.title ? <Text style={styles.title}>{post.title}</Text> : null}
+       <Text style={[styles.caption, post.title ? { marginTop: 4 } : null]}>{post.caption}</Text>
+       {nutriText(post) ? <Text style={styles.nutri}>{nutriText(post)}</Text> : null}
++      {post.restrictionHits && post.restrictionHits.length > 0 ? (
++        <Text style={styles.warn}>⚠️ มีส่วนผสมที่คุณแพ้/ไม่กิน: {post.restrictionHits.join(', ')}</Text>
++      ) : null}
+ 
+       <View style={styles.actionBar}>
+         <TouchableOpacity style={styles.actionItem} onPress={() => onToggleLike(post.id)}>
+@@ -199,6 +202,7 @@ const styles = StyleSheet.create({
+   title: { color: colors.text, marginTop: 10, fontSize: 17, fontWeight: 'bold' },
+   caption: { color: colors.text, marginTop: 10, fontSize: 14 },
+   nutri: { color: colors.muted, fontSize: 12, marginTop: 4 },
++  warn: { color: '#E53935', fontSize: 12, fontWeight: 'bold', marginTop: 4 },
+   actionBar: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
+   actionItem: { flexDirection: 'row', alignItems: 'center', marginRight: 14 },
+   actionCount: { marginLeft: 4, color: colors.text, fontSize: 12 },
+diff --git a/data/profileOptions.js b/data/profileOptions.js
+new file mode 100644
+index 0000000..dad6612
+--- /dev/null
++++ b/data/profileOptions.js
+@@ -0,0 +1,37 @@
++// ตัวเลือกโปรไฟล์ที่ใช้ร่วมกันหลายหน้า (ตั้งค่าครั้งแรก / แก้ไขโปรไฟล์ / เป้าหมาย)
++
++export const USER_GROUPS = ['นักศึกษาหอพัก', 'แม่บ้าน', 'สายสุขภาพ-นักกีฬา', 'อื่นๆ'];
++
++export const HEALTH_GOALS = ['สร้างกล้ามเนื้อ (High Protein)', 'ควบคุมน้ำหนัก', 'ประหยัดงบ'];
++
++// ข้อจำกัดอาหาร = อาหารที่แพ้ / ไม่กิน / กินไม่ได้ (แพ้, ศาสนา-ความเชื่อ, สุขภาพ, รสชาติ)
++export const ALLERGY_SUGGEST = [
++  'กุ้ง',
++  'ถั่วลิสง',
++  'นม',
++  'ไข่',
++  'ถั่วเหลือง',
++  'ข้าวสาลี',
++  'หอย',
++  'ปลา',
++  'ไม่กินเผ็ด',
++  'มังสวิรัติ',
++];
++
++// ข้อจำกัดที่เป็น "รูปแบบการกิน" ตรวจด้วยคำค้นในส่วนผสมไม่ได้ ปล่อยให้ AI พิจารณาแทน
++const NON_KEYWORD = ['เผ็ด', 'มังสวิรัติ', 'ฮาลาล', 'เจ'];
++
++// "แพ้ถั่ว" -> "ถั่ว", "ไม่กินกุ้ง" -> "กุ้ง"
++export function restrictionKeywords(restrictions = []) {
++  return restrictions
++    .map((r) => String(r).replace(/^(แพ้|ไม่กิน|งด)\s*/, '').trim())
++    .filter((k) => k && !NON_KEYWORD.includes(k));
++}
++
++// คืนรายการข้อจำกัดที่พบในส่วนผสม/ข้อความของโพสต์ (ใช้เตือนผู้ใช้ และกรองเมนูที่ Scan AI จับคู่ให้)
++export function findRestrictionHits(post, restrictions = []) {
++  const keywords = restrictionKeywords(restrictions);
++  if (keywords.length === 0 || !post) return [];
++  const text = [...(post.ingredients || []), post.caption || '', post.title || ''].join(' ');
++  return keywords.filter((k) => text.includes(k));
++}
+diff --git a/lib/api.js b/lib/api.js
+index 96c97bc..c7c5f16 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -214,23 +214,117 @@ export async function loginUser(email, password) {
+ }
+ 
+ // ฟังก์ชันสมัครสมาชิกใหม่
+-export async function registerUser(email, password, username) {
++// profile = { group, healthGoal, allergies, bio } (ไม่บังคับ) บันทึกลงตาราง users ทันทีถ้ามี session
++// ถ้า Supabase เปิด "ยืนยันอีเมล" จะยังไม่มี session ตอนสมัคร (คืนค่า data.session = null)
++// กรณีนั้นผู้ใช้จะได้กรอกโปรไฟล์ในหน้า "ตั้งค่าโปรไฟล์ครั้งแรก" ตอนล็อกอินครั้งแรกแทน
++export async function registerUser(email, password, username, profile = {}) {
+   const { data, error } = await supabase.auth.signUp({
+     email: email,
+     password: password,
+   });
+   if (error) throw error;
+ 
+-  // ถ้าสมัครสำเร็จ ให้สร้างโปรไฟล์ในตาราง users ด้วย
+-  if (data.user) {
+-    await supabase.from("users").insert({
+-      user_id: data.user.id,
+-      username: username || email.split("@")[0],
++  if (data.user && data.session) {
++    await saveMyProfile(data.user.id, {
++      name: username || email.split("@")[0],
++      ...profile,
+     });
+   }
+   return data;
+ }
+ 
++// ---------- โปรไฟล์ของผู้ใช้ (ตาราง users) ----------
++
++// แปลงแถวจากตาราง users เป็นรูปแบบ profile ที่หน้าจอใช้
++// ไม่ใช้ค่าตัวอย่างปลอมอีกต่อไป: ถ้ายังไม่ได้ตั้งค่า จะเป็นค่าว่าง
++export function mapProfileRow(row, authUser) {
++  const asArray = (v) => (Array.isArray(v) ? v : []);
++  return {
++    name:
++      row?.username ||
++      authUser?.user_metadata?.full_name ||
++      authUser?.email?.split("@")[0] ||
++      "",
++    email: authUser?.email || "",
++    avatar: row?.avatar_emoji || "👩",
++    avatarUrl: row?.avatar_url || null,
++    bio: row?.bio || "",
++    group: asArray(row?.user_groups)[0] || null,
++    healthGoal: asArray(row?.usage_goals)[0] || null,
++    allergies: asArray(row?.dietary_restrictions),
++    calorieGoal: row?.calorie_goal || 2000,
++  };
++}
++
++export async function fetchMyProfile(userId) {
++  const { data, error } = await supabase
++    .from("users")
++    .select("*")
++    .eq("user_id", userId)
++    .maybeSingle();
++  if (error) throw error;
++  return data; // null ถ้ายังไม่มีแถว
++}
++
++// บันทึกเฉพาะช่องที่ส่งมาใน patch
++// patch: { name, bio, group, healthGoal, allergies, calorieGoal, avatar (อีโมจิ) }
++export async function saveMyProfile(userId, patch) {
++  const row = {};
++  if (patch.name !== undefined) row.username = patch.name;
++  if (patch.bio !== undefined) row.bio = patch.bio;
++  if (patch.group !== undefined) row.user_groups = patch.group ? [patch.group] : [];
++  if (patch.healthGoal !== undefined)
++    row.usage_goals = patch.healthGoal ? [patch.healthGoal] : [];
++  if (patch.allergies !== undefined) row.dietary_restrictions = patch.allergies || [];
++  if (patch.calorieGoal !== undefined) row.calorie_goal = patch.calorieGoal;
++  if (patch.avatar !== undefined) row.avatar_emoji = patch.avatar;
++  if (Object.keys(row).length === 0) return;
++
++  // .select() เพื่อรู้ว่ามีแถวถูกแก้จริง (ถ้า RLS ไม่อนุญาต หรือยังไม่มีแถว จะได้ 0 แถว)
++  const { data, error } = await supabase
++    .from("users")
++    .update(row)
++    .eq("user_id", userId)
++    .select("user_id");
++  if (error) throw error;
++
++  if (!data || data.length === 0) {
++    // ยังไม่มีแถวของผู้ใช้คนนี้ (เช่นสมัครแล้วสร้างโปรไฟล์ไม่สำเร็จ) -> สร้างใหม่
++    const { error: insertError } = await supabase
++      .from("users")
++      .insert({ user_id: userId, username: row.username || "ผู้ใช้งาน", ...row });
++    if (insertError) throw insertError;
++  }
++}
++
++// ---------- Session / ออกจากระบบ / รีเซ็ตรหัสผ่าน ----------
++
++// เช็กว่ามีการล็อกอินค้างอยู่ไหม (ใช้ตอนเปิดแอป จะได้ไม่ต้องล็อกอินใหม่ทุกครั้ง)
++export async function getCurrentSession() {
++  try {
++    const { data } = await supabase.auth.getSession();
++    return data?.session || null;
++  } catch (err) {
++    console.log("อ่าน session ไม่สำเร็จ:", err?.message);
++    return null;
++  }
++}
++
++export async function signOutUser() {
++  const { error } = await supabase.auth.signOut();
++  if (error) console.log("ออกจากระบบไม่สำเร็จ:", error.message);
++}
++
++// ส่งอีเมลรีเซ็ตรหัสผ่านจริงผ่าน Supabase
++export async function sendPasswordReset(email) {
++  const redirectTo =
++    Platform.OS === "web" ? undefined : getOAuthRedirectUrl();
++  const { error } = await supabase.auth.resetPasswordForEmail(email, {
++    redirectTo,
++  });
++  if (error) throw error;
++}
++
+ // ตรวจสอบและสร้างโปรไฟล์ในตาราง users สำหรับผู้ใช้ที่ล็อกอินผ่าน OAuth
+ export async function syncOAuthUser(user) {
+   if (!user) return;
+@@ -492,12 +586,14 @@ export async function clearAvatar(userId) {
+ export async function fetchCreators() {
+   const { data, error } = await supabase
+     .from("users")
+-    .select("user_id, username, avatar_url");
++    .select("user_id, username, avatar_url, avatar_emoji, bio");
+   if (error) throw error;
+   return (data || []).map((u) => ({
+     id: u.user_id,
+     name: u.username || "ไม่ระบุชื่อ",
+     avatarUrl: u.avatar_url || null,
++    emoji: u.avatar_emoji || null,
++    bio: u.bio || "",
+   }));
+ }
+ 
+diff --git a/lib/gemini.js b/lib/gemini.js
+index 370b7eb..1a70933 100644
+--- a/lib/gemini.js
++++ b/lib/gemini.js
+@@ -90,6 +90,9 @@ export async function analyzeIngredientsAndSuggestMenus({
+   mimeType = "image/jpeg",
+   manualIngredients = [],
+   prompt = "",
++  restrictions = [], // แพ้อาหาร/ข้อจำกัดอาหารของผู้ใช้
++  userGroup = null,
++  healthGoal = null,
+ }) {
+   if (!isGeminiConfigured()) {
+     throw new Error(
+@@ -117,6 +120,15 @@ export async function analyzeIngredientsAndSuggestMenus({
+   }
+ 3. สไตล์หรือความต้องการของผู้ใช้: ${prompt.trim() ? prompt.trim() : "ทำง่าย อร่อย ใช้วัตถุดิบที่มีให้คุ้มค่า"}
+ 4. คิดและแนะนำเมนูอาหารที่เหมาะสม 3-5 เมนู ที่ทำได้จริงจากวัตถุดิบเหล่านี้
++${
++    restrictions.length > 0
++      ? `5. ข้อจำกัดด้านอาหารของผู้ใช้ (สำคัญมาก ห้ามละเลย): ${restrictions.join(", ")}
++   - ห้ามแนะนำเมนูที่มีวัตถุดิบเหล่านี้ หรือส่วนผสมที่มาจากสิ่งเหล่านี้ (รวมถึงเครื่องปรุงที่มีส่วนประกอบดังกล่าว)
++   - ถ้าวัตถุดิบที่ตรวจพบมีของที่ผู้ใช้แพ้/ไม่กิน ให้ยังรายงานใน detected_ingredients แต่ไม่ใช้ในเมนู`
++      : ""
++  }
++${userGroup ? `ผู้ใช้เป็นกลุ่ม: ${userGroup}` : ""}
++${healthGoal ? `เป้าหมายของผู้ใช้: ${healthGoal}` : ""}
+ 
+ ตอบกลับเป็น JSON เท่านั้น โดยมีโครงสร้างดังนี้:
+ {
+diff --git a/screens/CreatorScreen.js b/screens/CreatorScreen.js
+index 6e8314f..8c4a912 100644
+--- a/screens/CreatorScreen.js
++++ b/screens/CreatorScreen.js
+@@ -45,6 +45,7 @@ export default function CreatorScreen({
+                 <Avatar emoji={creator.emoji} uri={creator.avatarUrl} fontSize={44} />
+               </View>
+               <Text style={styles.name}>{creator.name}</Text>
++              {creator.bio ? <Text style={styles.bio}>{creator.bio}</Text> : null}
+ 
+               <View style={styles.stats}>
+                 <View style={styles.stat}>
+@@ -123,6 +124,7 @@ const styles = StyleSheet.create({
+   profile: { backgroundColor: '#fff', borderRadius: 24, padding: 18, alignItems: 'center' },
+   avatar: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#FFE0B2', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+   name: { fontSize: 20, fontWeight: 'bold', color: colors.text, marginTop: 10 },
++  bio: { fontSize: 13, color: colors.text, opacity: 0.8, textAlign: 'center', marginTop: 6, marginHorizontal: 24, lineHeight: 19 },
+   handle: { color: colors.muted, fontSize: 13, marginTop: 2 },
+   focus: { color: colors.primary, fontSize: 13, marginTop: 6 },
+ 
+diff --git a/screens/EditProfileScreen.js b/screens/EditProfileScreen.js
+index 1e1b5b4..7b50b25 100644
+--- a/screens/EditProfileScreen.js
++++ b/screens/EditProfileScreen.js
+@@ -5,10 +5,9 @@ import { Ionicons } from '@expo/vector-icons';
+ import * as ImagePicker from 'expo-image-picker';
+ import Avatar from '../components/Avatar';
+ import { colors } from '../theme';
++import { USER_GROUPS as GROUPS, ALLERGY_SUGGEST as SUGGEST } from '../data/profileOptions';
+ 
+ const AVATARS = ['👩', '👨', '🧑', '👧', '👦', '👵', '👴', '👩‍🍳', '🧑‍🍳', '🐱', '🐶', '🦊'];
+-const GROUPS = ['นักศึกษาหอพัก', 'แม่บ้าน', 'สายสุขภาพ-นักกีฬา', 'อื่นๆ'];
+-const SUGGEST = ['กุ้ง', 'ถั่วลิสง', 'นม', 'ไข่', 'ถั่วเหลือง', 'ข้าวสาลี', 'หอย', 'ปลา', 'ไม่กินเผ็ด', 'มังสวิรัติ'];
+ 
+ function Label({ children }) {
+   return <Text style={styles.label}>{children}</Text>;
+@@ -16,7 +15,7 @@ function Label({ children }) {
+ 
+ export default function EditProfileScreen({ profile, onSave, onBack }) {
+   const [name, setName] = useState(profile.name);
+-  const [email, setEmail] = useState(profile.email);
++  const [bio, setBio] = useState(profile.bio || '');
+   const [avatar, setAvatar] = useState(profile.avatar);
+   // รูปโปรไฟล์ที่ผู้ใช้เลือกเอง: avatarUrl = รูปที่ใช้อยู่/พรีวิว, avatarPick = ไฟล์ใหม่ที่ยังไม่ได้อัปโหลด หรือ 'clear'
+   const [avatarUrl, setAvatarUrl] = useState(profile.avatarUrl || null);
+@@ -67,13 +66,12 @@ export default function EditProfileScreen({ profile, onSave, onBack }) {
+   const save = async () => {
+     const e = {};
+     if (!name.trim()) e.name = 'กรุณากรอกชื่อ';
+-    if (email.trim() && !/^\S+@\S+\.\S+$/.test(email.trim())) e.email = 'รูปแบบอีเมลไม่ถูกต้อง';
+     setErrors(e);
+     if (Object.keys(e).length > 0) return;
+ 
+     setSaving(true);
+     try {
+-      await onSave({ name: name.trim(), email: email.trim(), avatar, group, allergies, avatarPick });
++      await onSave({ name: name.trim(), bio: bio.trim(), avatar, group, allergies, avatarPick });
+     } catch (err) {
+       console.log('บันทึกโปรไฟล์ไม่สำเร็จ:', err);
+       setErrors({ save: 'บันทึกไม่สำเร็จ: ' + (err?.message || 'โปรดลองอีกครั้ง') });
+@@ -128,17 +126,22 @@ export default function EditProfileScreen({ profile, onSave, onBack }) {
+         <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="ชื่อ-นามสกุล" placeholderTextColor={colors.muted} />
+         {errors.name ? <Text style={styles.error}>{errors.name}</Text> : null}
+ 
+-        <Label>อีเมล</Label>
++        <Label>ไบโอ</Label>
+         <TextInput
+-          style={styles.input}
+-          value={email}
+-          onChangeText={setEmail}
+-          placeholder="อีเมล"
++          style={[styles.input, { minHeight: 80, textAlignVertical: 'top', paddingTop: 12 }]}
++          value={bio}
++          onChangeText={setBio}
++          placeholder="แนะนำตัวสั้นๆ ให้คนอื่นรู้จักคุณ"
+           placeholderTextColor={colors.muted}
+-          autoCapitalize="none"
+-          keyboardType="email-address"
++          multiline
++          maxLength={160}
+         />
+-        {errors.email ? <Text style={styles.error}>{errors.email}</Text> : null}
++        <Text style={styles.counter}>{bio.length}/160</Text>
++
++        <Label>อีเมล (แก้ไขไม่ได้ ผูกกับบัญชีที่ล็อกอิน)</Label>
++        <View style={[styles.input, { justifyContent: 'center', backgroundColor: '#F5F0E8' }]}>
++          <Text style={{ color: colors.muted, fontSize: 14 }}>{profile.email || '-'}</Text>
++        </View>
+ 
+         <Label>กลุ่มผู้ใช้ (เลือกได้ 1)</Label>
+         <View style={styles.wrap}>
+@@ -221,6 +224,7 @@ const styles = StyleSheet.create({
+   label: { fontSize: 14, fontWeight: 'bold', color: colors.text, marginTop: 18, marginBottom: 8 },
+   input: { backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 16, paddingHorizontal: 14, minHeight: 44, fontSize: 14 },
+   error: { color: '#E53935', fontSize: 12, marginTop: 4 },
++  counter: { alignSelf: 'flex-end', fontSize: 11, color: colors.muted, marginTop: 4 },
+   wrap: { flexDirection: 'row', flexWrap: 'wrap' },
+   chip: { backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, marginRight: 8, marginBottom: 8 },
+   chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+diff --git a/screens/ForgotPasswordScreen.js b/screens/ForgotPasswordScreen.js
+index 456b8c2..51f6170 100644
+--- a/screens/ForgotPasswordScreen.js
++++ b/screens/ForgotPasswordScreen.js
+@@ -1,4 +1,5 @@
+ import React, { useState } from 'react';
++import { sendPasswordReset } from '../lib/api';
+ import {
+   View,
+   Text,
+@@ -17,8 +18,9 @@ export default function ForgotPasswordScreen({ onBack }) {
+   const [email, setEmail] = useState('');
+   const [error, setError] = useState('');
+   const [sent, setSent] = useState(false); // false = กรอกอีเมล, true = ส่งลิงก์แล้ว
++  const [sending, setSending] = useState(false);
+ 
+-  const handleSend = () => {
++  const handleSend = async () => {
+     const value = email.trim();
+     if (!value) {
+       setError('กรุณากรอกอีเมล');
+@@ -29,9 +31,16 @@ export default function ForgotPasswordScreen({ onBack }) {
+       return;
+     }
+     setError('');
+-    // TODO: เชื่อมต่อ backend ตรงนี้ เช่น
+-    // await sendPasswordResetEmail(auth, value)  (Firebase)
+-    setSent(true);
++    setSending(true);
++    try {
++      await sendPasswordReset(value); // ส่งอีเมลรีเซ็ตรหัสผ่านจริงผ่าน Supabase
++      setSent(true);
++    } catch (err) {
++      console.log('ส่งอีเมลรีเซ็ตรหัสผ่านไม่สำเร็จ:', err);
++      setError('ส่งอีเมลไม่สำเร็จ: ' + (err?.message || 'โปรดลองอีกครั้ง'));
++    } finally {
++      setSending(false);
++    }
+   };
+ 
+   return (
+@@ -82,8 +91,8 @@ export default function ForgotPasswordScreen({ onBack }) {
+                 </View>
+                 {!!error && <Text style={styles.errorText}>{error}</Text>}
+ 
+-                <TouchableOpacity style={styles.btn} onPress={handleSend}>
+-                  <Text style={styles.btnText}>ส่งลิงก์รีเซ็ตรหัสผ่าน</Text>
++                <TouchableOpacity style={styles.btn} onPress={handleSend} disabled={sending}>
++                  <Text style={styles.btnText}>{sending ? 'กำลังส่ง...' : 'ส่งลิงก์รีเซ็ตรหัสผ่าน'}</Text>
+                 </TouchableOpacity>
+               </>
+             ) : (
+diff --git a/screens/GoalScreen.js b/screens/GoalScreen.js
+index fa58c50..13829ff 100644
+--- a/screens/GoalScreen.js
++++ b/screens/GoalScreen.js
+@@ -3,9 +3,9 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ImageB
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
++import { HEALTH_GOALS } from '../data/profileOptions';
+ 
+ const PRESETS = [1500, 1800, 2000, 2200, 2500];
+-const HEALTH_GOALS = ['สร้างกล้ามเนื้อ (High Protein)', 'ควบคุมน้ำหนัก', 'ประหยัดงบ'];
+ const MIN = 800;
+ const MAX = 5000;
+ 
+@@ -14,6 +14,8 @@ export default function GoalScreen({ profile, eaten, onSave, onBack }) {
+   const [draft, setDraft] = useState(String(profile.calorieGoal));
+   const [goal, setGoal] = useState(profile.healthGoal);
+   const [saved, setSaved] = useState(false);
++  const [saving, setSaving] = useState(false);
++  const [saveError, setSaveError] = useState('');
+   const timer = useRef(null);
+ 
+   useEffect(() => () => clearTimeout(timer.current), []);
+@@ -34,9 +36,19 @@ export default function GoalScreen({ profile, eaten, onSave, onBack }) {
+ 
+   const left = kcal - eaten;
+ 
+-  const save = () => {
++  const save = async () => {
+     const v = clamp(kcal);
+-    onSave({ calorieGoal: v, healthGoal: goal });
++    setSaving(true);
++    setSaveError('');
++    try {
++      await onSave({ calorieGoal: v, healthGoal: goal });
++    } catch (err) {
++      console.log('บันทึกเป้าหมายไม่สำเร็จ:', err);
++      setSaveError('บันทึกไม่สำเร็จ: ' + (err?.message || 'โปรดลองอีกครั้ง'));
++      setSaving(false);
++      return;
++    }
++    setSaving(false);
+     setSaved(true);
+     timer.current = setTimeout(onBack, 700);
+   };
+@@ -119,8 +131,10 @@ export default function GoalScreen({ profile, eaten, onSave, onBack }) {
+           </View>
+         )}
+ 
+-        <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saved}>
+-          <Text style={styles.saveText}>บันทึก</Text>
++        {saveError ? <Text style={{ color: '#E53935', fontSize: 12, marginBottom: 8 }}>{saveError}</Text> : null}
++
++        <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saved || saving}>
++          <Text style={styles.saveText}>{saving ? 'กำลังบันทึก...' : 'บันทึก'}</Text>
+         </TouchableOpacity>
+       </ScrollView>
+     </SafeAreaView>
+diff --git a/screens/MainScreen.js b/screens/MainScreen.js
+index 7b864c7..5b9db7d 100644
+--- a/screens/MainScreen.js
++++ b/screens/MainScreen.js
+@@ -1,5 +1,6 @@
+ import { useEffect, useMemo, useState } from "react";
+ import {
++  ActivityIndicator,
+   BackHandler,
+   KeyboardAvoidingView,
+   Platform,
+@@ -17,18 +18,23 @@ import {
+   fetchCreators,
+   fetchFavorites,
+   fetchFollows,
++  fetchMyProfile,
+   fetchNotifications,
+   fetchPosts,
+   followUser,
+   likePost,
++  mapProfileRow,
+   markAllNotificationsRead,
+   markNotificationRead,
+   removeFavorite,
+   saveFavorite,
++  saveMyProfile,
++  signOutUser,
+   unfollowUser,
+   unlikePost,
+   uploadAvatar,
+ } from "../lib/api";
++import { findRestrictionHits } from "../data/profileOptions";
+ import { supabase } from "../lib/supabase";
+ import { colors } from "../theme";
+ 
+@@ -46,39 +52,24 @@ import MyPostsScreen from "./MyPostsScreen";
+ import NotificationsScreen from "./NotificationsScreen";
+ import PostDetailScreen from "./PostDetailScreen";
+ import ScanHistoryScreen from "./ScanHistoryScreen";
++import OnboardingScreen from "./OnboardingScreen";
+ import ScanScreen from "./ScanScreen";
+ 
+-const DAY = 86400000;
+ const EATEN_TODAY = 1400; // ข้อมูลจำลอง (ยังไม่มีระบบบันทึกมื้ออาหาร)
+ 
++// ค่าเริ่มต้นก่อนโหลดโปรไฟล์จริงจาก Supabase (ไม่ใช้ข้อมูลตัวอย่างปลอมอีกต่อไป)
+ const INITIAL_PROFILE = {
+-  name: "รุ่งทิวา",
+-  email: "rungtiwa@example.com",
++  name: "",
++  email: "",
+   avatar: "👩",
+   avatarUrl: null, // รูปโปรไฟล์ที่ผู้ใช้อัปโหลดเอง (ถ้าไม่มีใช้อีโมจิ)
+-  group: "นักศึกษาหอพัก",
++  bio: "",
++  group: null,
+   calorieGoal: 2000,
+   healthGoal: null,
+-  allergies: ["กุ้ง", "ถั่วลิสง"],
++  allergies: [],
+ };
+ 
+-const SAMPLE_SCANS = [
+-  {
+-    id: 1,
+-    at: Date.now() - 1 * DAY,
+-    prompt: "healthy",
+-    ingredients: ["อกไก่", "บรอกโคลี", "ไข่"],
+-    menus: ["อกไก่ย่างซอสส้ม", "ไข่ตุ๋นบรอกโคลี"],
+-  },
+-  {
+-    id: 2,
+-    at: Date.now() - 4 * DAY,
+-    prompt: "",
+-    ingredients: ["แซลมอน", "มะเขือเทศ"],
+-    menus: ["แซลมอนอบผัก"],
+-  },
+-];
+-
+ export default function MainScreen({ onLogout }) {
+   const [tab, setTab] = useState("home");
+   // stack ของหน้าที่เปิดทับแท็บ เช่น แจ้งเตือน สแกน รายละเอียดโพสต์
+@@ -86,8 +77,10 @@ export default function MainScreen({ onLogout }) {
+   const [posts, setPosts] = useState([]);
+   const [profile, setProfile] = useState(INITIAL_PROFILE);
+   const [notifications, setNotifications] = useState([]);
+-  const [scanHistory, setScanHistory] = useState(SAMPLE_SCANS);
++  const [scanHistory, setScanHistory] = useState([]);
+   const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
++  const [profileLoaded, setProfileLoaded] = useState(false); // โหลดโปรไฟล์จาก DB เสร็จแล้วหรือยัง
++  const [needsOnboarding, setNeedsOnboarding] = useState(false); // ยังไม่เคยตั้งค่าโปรไฟล์ครั้งแรก
+   const [creators, setCreators] = useState([]); // ผู้ใช้ทั้งหมดจาก Supabase
+   const [follows, setFollows] = useState([]); // [{ follower_id, following_id }]
+   const [collections, setCollections] = useState([]); // กลุ่ม Favorite
+@@ -161,23 +154,19 @@ export default function MainScreen({ onLogout }) {
+           loadExtras(user.id); // ติดตาม / Favorite / รายชื่อ creator (ไม่รอ ไม่ให้ขวางการโหลดโพสต์)
+ 
+           // 2. ดึงข้อมูลโปรไฟล์จริงจากตาราง users โดยใช้ user_id
+-          const { data: profileData, error: profileError } = await supabase
+-            .from("users")
+-            .select("*")
+-            .eq("user_id", user.id)
+-            .single();
+-
+-          if (!profileError && profileData && !cancelled) {
+-            // อัปเดตข้อมูลโปรไฟล์ด้วยข้อมูลจริงจากฐานข้อมูล
+-            setProfile((prev) => ({
+-              ...prev,
+-              name: profileData.username || prev.name,
+-              email: user.email,
+-              avatarUrl: profileData.avatar_url || null,
+-              group: profileData.user_groups?.[0] || prev.group,
+-              healthGoal: profileData.usage_goals?.[0] || prev.healthGoal,
+-              allergies: profileData.dietary_restrictions || prev.allergies,
+-            }));
++          try {
++            const row = await fetchMyProfile(user.id);
++            if (!cancelled) {
++              setProfile(mapProfileRow(row, user));
++              // ยังไม่เคยเลือกกลุ่มผู้ใช้ = ยังไม่เคยตั้งค่าโปรไฟล์ -> ไปหน้าตั้งค่าครั้งแรก
++              setNeedsOnboarding(
++                !(Array.isArray(row?.user_groups) && row.user_groups.length > 0),
++              );
++            }
++          } catch (profileError) {
++            // โหลดไม่สำเร็จ (เช่นเน็ตหลุด) ไม่บังคับ onboarding เพื่อไม่ให้ทับข้อมูลเดิม
++            console.log("โหลดโปรไฟล์ไม่สำเร็จ:", profileError?.message);
++            if (!cancelled) setProfile(mapProfileRow(null, user));
+           }
+         }
+ 
+@@ -189,6 +178,8 @@ export default function MainScreen({ onLogout }) {
+         }
+       } catch (error) {
+         console.log("โหลดข้อมูลไม่สำเร็จ:", error.message);
++      } finally {
++        if (!cancelled) setProfileLoaded(true);
+       }
+     };
+ 
+@@ -352,7 +343,11 @@ export default function MainScreen({ onLogout }) {
+               comments,
+             }
+           : { ...p, comments };
+-      }),
++      }).map((p) => ({
++        ...p,
++        // ส่วนผสมที่ตรงกับอาหารที่ผู้ใช้แพ้/ไม่กิน (ใช้แสดงคำเตือนบนโพสต์)
++        restrictionHits: findRestrictionHits(p, profile.allergies),
++      })),
+     [posts, profile],
+   );
+   const myPosts = viewPosts.filter((p) => p.mine);
+@@ -496,30 +491,67 @@ export default function MainScreen({ onLogout }) {
+     }
+   }, [activeTopName, userId]);
+ 
+-  // ---------- โปรไฟล์ ----------
++  // ---------- โปรไฟล์ (บันทึกลง Supabase ตาราง users) ----------
+   const saveProfile = (patch) => setProfile((prev) => ({ ...prev, ...patch }));
+ 
++  const requireUserId = async () => {
++    if (userId) return userId;
++    const {
++      data: { user },
++    } = await supabase.auth.getUser();
++    if (!user) throw new Error("กรุณาล็อกอินก่อน");
++    return user.id;
++  };
++
+   // บันทึกหน้าแก้ไขโปรไฟล์ (รวมอัปโหลดรูปโปรไฟล์ที่เลือกจากเครื่อง)
+   // avatarPick = { uri, mimeType, base64 } ถ้าเลือกรูปใหม่ / "clear" ถ้ากลับไปใช้อีโมจิ / null ถ้าไม่เปลี่ยน
+   const saveEditedProfile = async ({ avatarPick, ...patch }) => {
++    const uid = await requireUserId();
+     if (avatarPick) {
+-      const {
+-        data: { user },
+-      } = await supabase.auth.getUser();
+-      if (!user) throw new Error("กรุณาล็อกอินก่อน");
+       if (avatarPick === "clear") {
+-        await clearAvatar(user.id);
++        await clearAvatar(uid);
+         patch.avatarUrl = null;
+       } else {
+-        patch.avatarUrl = await uploadAvatar(
+-          { ...avatarPick, type: "image" },
+-          user.id,
+-        );
++        patch.avatarUrl = await uploadAvatar({ ...avatarPick, type: "image" }, uid);
+       }
+     }
++    await saveMyProfile(uid, {
++      name: patch.name,
++      bio: patch.bio,
++      group: patch.group,
++      allergies: patch.allergies,
++      avatar: patch.avatar,
++    });
+     saveProfile(patch);
+   };
+ 
++  // บันทึกเป้าหมายแคลอรี่ / เป้าหมายสุขภาพ
++  const saveGoal = async (patch) => {
++    const uid = await requireUserId();
++    await saveMyProfile(uid, {
++      calorieGoal: patch.calorieGoal,
++      healthGoal: patch.healthGoal ?? null,
++    });
++    saveProfile(patch);
++  };
++
++  // จบหน้าตั้งค่าโปรไฟล์ครั้งแรก
++  const finishOnboarding = async (patch) => {
++    const uid = await requireUserId();
++    await saveMyProfile(uid, {
++      ...(profile.name ? { name: profile.name } : {}),
++      ...patch,
++    });
++    saveProfile(patch);
++    setNeedsOnboarding(false);
++  };
++
++  // ออกจากระบบจริง (ล้าง session ใน Supabase) แล้วกลับไปหน้า Login
++  const handleLogout = async () => {
++    await signOutUser();
++    if (onLogout) onLogout();
++  };
++
+   // ---------- หน้าที่เปิดทับแท็บ ----------
+   const renderOverlay = () => {
+     if (!top) return null;
+@@ -537,6 +569,9 @@ export default function MainScreen({ onLogout }) {
+         return (
+           <ScanScreen
+             posts={viewPosts}
++            restrictions={profile.allergies}
++            userGroup={profile.group}
++            healthGoal={profile.healthGoal}
+             initialPrompt={top.params.prompt}
+             onSaveScan={addScan}
+             onOpenPost={(id) => push("postDetail", { postId: id })}
+@@ -564,7 +599,7 @@ export default function MainScreen({ onLogout }) {
+             ? { id: cid, name: fromPost.author, avatarUrl: fromPost.avatarUrl }
+             : null);
+         const creator = base
+-          ? { ...base, followers: followerCount(cid), emoji: "🧑‍🍳" }
++          ? { ...base, followers: followerCount(cid), emoji: base.emoji || "🧑‍🍳" }
+           : null;
+         return (
+           <CreatorScreen
+@@ -618,7 +653,7 @@ export default function MainScreen({ onLogout }) {
+           <GoalScreen
+             profile={profile}
+             eaten={EATEN_TODAY}
+-            onSave={saveProfile}
++            onSave={saveGoal}
+             onBack={pop}
+           />
+         );
+@@ -637,6 +672,34 @@ export default function MainScreen({ onLogout }) {
+     }
+   };
+ 
++  // รอโหลดโปรไฟล์จริงก่อน จะได้ไม่เห็นข้อมูลปลอมวาบขึ้นมา
++  if (!profileLoaded) {
++    return (
++      <View
++        style={{
++          flex: 1,
++          backgroundColor: colors.bg,
++          alignItems: "center",
++          justifyContent: "center",
++        }}
++      >
++        <ActivityIndicator size="large" color={colors.primary} />
++      </View>
++    );
++  }
++
++  // ล็อกอินครั้งแรก (เช่น Google) ให้ตั้งค่าโปรไฟล์ก่อนเข้าหน้าแรก
++  if (needsOnboarding) {
++    return (
++      <KeyboardAvoidingView
++        style={{ flex: 1, backgroundColor: colors.bg }}
++        behavior="padding"
++      >
++        <OnboardingScreen name={profile.name} onDone={finishOnboarding} />
++      </KeyboardAvoidingView>
++    );
++  }
++
+   return (
+     <View style={{ flex: 1, backgroundColor: colors.bg }}>
+       {/* ดันเนื้อหาขึ้นเหนือแป้นพิมพ์ จะได้เห็นสิ่งที่กำลังพิมพ์ (ทุกหน้า) */}
+@@ -681,7 +744,7 @@ export default function MainScreen({ onLogout }) {
+           <Profile
+             profile={profile}
+             postCount={myPosts.length}
+-            onLogout={onLogout}
++            onLogout={handleLogout}
+             onEditProfile={() => push("editProfile")}
+             onOpenMyPosts={() => push("myPosts")}
+             onOpenFavorites={() => push("favorites")}
+diff --git a/screens/OnboardingScreen.js b/screens/OnboardingScreen.js
+new file mode 100644
+index 0000000..f675ada
+--- /dev/null
++++ b/screens/OnboardingScreen.js
+@@ -0,0 +1,189 @@
++import React, { useState } from 'react';
++import {
++  View,
++  Text,
++  TextInput,
++  TouchableOpacity,
++  StyleSheet,
++  ScrollView,
++  ActivityIndicator,
++} from 'react-native';
++import { SafeAreaView } from 'react-native-safe-area-context';
++import { Ionicons } from '@expo/vector-icons';
++import { colors } from '../theme';
++import { USER_GROUPS, HEALTH_GOALS, ALLERGY_SUGGEST } from '../data/profileOptions';
++
++// หน้า "ตั้งค่าโปรไฟล์ครั้งแรก" แสดงตอนล็อกอินแล้วยังไม่เคยเลือกกลุ่มผู้ใช้
++// (เช่น เพิ่งล็อกอินด้วย Google ครั้งแรก) บังคับเลือกกลุ่มผู้ใช้ ส่วนที่เหลือข้ามได้
++export default function OnboardingScreen({ name, onDone }) {
++  const [group, setGroup] = useState(null);
++  const [goal, setGoal] = useState(null);
++  const [allergies, setAllergies] = useState([]);
++  const [custom, setCustom] = useState('');
++  const [bio, setBio] = useState('');
++  const [error, setError] = useState('');
++  const [saving, setSaving] = useState(false);
++
++  const toggleAllergy = (a) =>
++    setAllergies((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
++
++  const addCustom = () => {
++    const t = custom.trim();
++    if (!t) return;
++    setAllergies((prev) => (prev.includes(t) ? prev : [...prev, t]));
++    setCustom('');
++  };
++
++  const submit = async () => {
++    if (!group) {
++      setError('กรุณาเลือกกลุ่มผู้ใช้อย่างน้อย 1 อย่าง');
++      return;
++    }
++    setError('');
++    setSaving(true);
++    try {
++      await onDone({ group, healthGoal: goal, allergies, bio: bio.trim() });
++    } catch (err) {
++      console.log('บันทึกโปรไฟล์ครั้งแรกไม่สำเร็จ:', err);
++      setError('บันทึกไม่สำเร็จ: ' + (err?.message || 'โปรดลองอีกครั้ง'));
++      setSaving(false);
++    }
++  };
++
++  const options = [...ALLERGY_SUGGEST, ...allergies.filter((a) => !ALLERGY_SUGGEST.includes(a))];
++
++  return (
++    <SafeAreaView edges={['top']} style={styles.container}>
++      <ScrollView
++        contentContainerStyle={{ padding: 20, paddingBottom: 140 }}
++        keyboardShouldPersistTaps="handled"
++        keyboardDismissMode="on-drag"
++      >
++        <Text style={styles.hello}>ยินดีต้อนรับ{name ? ` ${name}` : ''} 👋</Text>
++        <Text style={styles.sub}>
++          ตั้งค่าโปรไฟล์ของคุณสักครู่ เพื่อให้ AI แนะนำเมนูที่เหมาะกับคุณ
++          และเลี่ยงอาหารที่คุณกินไม่ได้ (แก้ไขได้ภายหลังในหน้าโปรไฟล์)
++        </Text>
++
++        <Text style={styles.label}>
++          คุณเป็นใคร? <Text style={styles.required}>*</Text>
++        </Text>
++        <View style={styles.wrap}>
++          {USER_GROUPS.map((g) => (
++            <Chip key={g} label={g} on={group === g} onPress={() => setGroup(g)} />
++          ))}
++        </View>
++
++        <Text style={styles.label}>เป้าหมายของคุณ (ไม่บังคับ)</Text>
++        <View style={styles.wrap}>
++          {HEALTH_GOALS.map((g) => (
++            <Chip key={g} label={g} on={goal === g} onPress={() => setGoal(goal === g ? null : g)} />
++          ))}
++        </View>
++
++        <Text style={styles.label}>แพ้อาหาร / ข้อจำกัดอาหาร (ไม่บังคับ)</Text>
++        <Text style={styles.hint}>
++          อาหารที่คุณแพ้ ไม่กิน หรือกินไม่ได้ เช่น แพ้กุ้ง แพ้นม มังสวิรัติ ไม่กินเผ็ด
++          เลือกได้หลายอย่าง
++        </Text>
++        <View style={styles.wrap}>
++          {options.map((a) => (
++            <Chip key={a} label={a} on={allergies.includes(a)} onPress={() => toggleAllergy(a)} />
++          ))}
++        </View>
++        <View style={styles.addRow}>
++          <TextInput
++            style={[styles.input, { flex: 1 }]}
++            value={custom}
++            onChangeText={setCustom}
++            onSubmitEditing={addCustom}
++            placeholder="เพิ่มอย่างอื่น เช่น งา"
++            placeholderTextColor={colors.muted}
++          />
++          <TouchableOpacity style={styles.addBtn} onPress={addCustom}>
++            <Ionicons name="add" size={22} color="#fff" />
++          </TouchableOpacity>
++        </View>
++
++        <Text style={styles.label}>แนะนำตัวสั้นๆ (ไบโอ ไม่บังคับ)</Text>
++        <TextInput
++          style={[styles.input, { minHeight: 80, textAlignVertical: 'top', paddingTop: 12 }]}
++          value={bio}
++          onChangeText={setBio}
++          placeholder="เช่น ชอบทำอาหารง่ายๆ ในหอ งบไม่เกิน 50 บาท"
++          placeholderTextColor={colors.muted}
++          multiline
++          maxLength={160}
++        />
++        <Text style={styles.counter}>{bio.length}/160</Text>
++
++        {error ? <Text style={styles.error}>{error}</Text> : null}
++
++        <TouchableOpacity style={styles.btn} onPress={submit} disabled={saving} activeOpacity={0.85}>
++          {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>เริ่มใช้งาน</Text>}
++        </TouchableOpacity>
++      </ScrollView>
++    </SafeAreaView>
++  );
++}
++
++function Chip({ label, on, onPress }) {
++  return (
++    <TouchableOpacity style={[styles.chip, on && styles.chipOn]} onPress={onPress} activeOpacity={0.8}>
++      <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
++    </TouchableOpacity>
++  );
++}
++
++const styles = StyleSheet.create({
++  container: { flex: 1, backgroundColor: colors.bg },
++  hello: { fontSize: 24, fontWeight: 'bold', color: colors.text, marginTop: 8 },
++  sub: { fontSize: 14, color: colors.text, opacity: 0.8, marginTop: 8, lineHeight: 21 },
++  label: { fontSize: 15, fontWeight: 'bold', color: colors.text, marginTop: 24, marginBottom: 8 },
++  required: { color: '#E53935' },
++  hint: { fontSize: 12, color: colors.muted, marginBottom: 8, lineHeight: 18 },
++  wrap: { flexDirection: 'row', flexWrap: 'wrap' },
++  chip: {
++    backgroundColor: '#fff',
++    borderWidth: 1,
++    borderColor: colors.border,
++    borderRadius: 20,
++    paddingHorizontal: 14,
++    paddingVertical: 8,
++    marginRight: 8,
++    marginBottom: 8,
++  },
++  chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
++  chipText: { color: colors.text, fontSize: 13 },
++  chipTextOn: { color: '#fff', fontWeight: 'bold' },
++  addRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
++  addBtn: {
++    marginLeft: 8,
++    width: 44,
++    height: 44,
++    borderRadius: 22,
++    backgroundColor: colors.primary,
++    alignItems: 'center',
++    justifyContent: 'center',
++  },
++  input: {
++    backgroundColor: '#fff',
++    borderWidth: 1,
++    borderColor: colors.border,
++    borderRadius: 16,
++    paddingHorizontal: 14,
++    minHeight: 44,
++    fontSize: 14,
++  },
++  counter: { alignSelf: 'flex-end', fontSize: 11, color: colors.muted, marginTop: 4 },
++  error: { color: '#E53935', fontSize: 13, marginTop: 14 },
++  btn: {
++    backgroundColor: colors.primary,
++    borderRadius: 30,
++    height: 52,
++    alignItems: 'center',
++    justifyContent: 'center',
++    marginTop: 24,
++  },
++  btnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
++});
+diff --git a/screens/Profile.js b/screens/Profile.js
+index bb85b27..cc99bbe 100644
+--- a/screens/Profile.js
++++ b/screens/Profile.js
+@@ -77,6 +77,7 @@ export default function ProfileScreen({
+           </View>
+           <Text style={styles.name}>{profile.name}</Text>
+           {profile.email ? <Text style={styles.email}>{profile.email}</Text> : null}
++          {profile.bio ? <Text style={styles.bio}>{profile.bio}</Text> : null}
+ 
+           <TouchableOpacity style={styles.editBtn} activeOpacity={0.85} onPress={onEditProfile}>
+             <Ionicons name="create-outline" size={16} color={COLORS.primary} />
+@@ -110,9 +111,13 @@ export default function ProfileScreen({
+ 
+           <View style={styles.infoRow}>
+             <Text style={styles.infoLabel}>กลุ่มผู้ใช้</Text>
+-            <View style={styles.chip}>
+-              <Text style={styles.chipText}>{profile.group}</Text>
+-            </View>
++            {profile.group ? (
++              <View style={styles.chip}>
++                <Text style={styles.chipText}>{profile.group}</Text>
++              </View>
++            ) : (
++              <Text style={styles.infoLabel}>ยังไม่ได้ตั้ง</Text>
++            )}
+           </View>
+ 
+           <View style={styles.infoRow}>
+@@ -223,6 +228,7 @@ const styles = StyleSheet.create({
+   avatarEmoji: { fontSize: 48 },
+   name: { marginTop: 12, fontSize: 22, fontWeight: '800', color: '#FFFFFF' },
+   email: { marginTop: 2, fontSize: 13, color: 'rgba(255,255,255,0.9)' },
++  bio: { marginTop: 8, marginHorizontal: 32, fontSize: 13, lineHeight: 19, color: '#FFFFFF', textAlign: 'center' },
+   editBtn: {
+     marginTop: 16,
+     flexDirection: 'row',
+diff --git a/screens/RegisterScreen.js b/screens/RegisterScreen.js
+index 6b8a3fb..8dfbec8 100644
+--- a/screens/RegisterScreen.js
++++ b/screens/RegisterScreen.js
+@@ -74,7 +74,25 @@ export default function RegisterScreen({ onBack, onRegister }) {
+ 
+     try {
+       Alert.alert("กำลังสมัครสมาชิก", "กรุณารอสักครู่...");
+-      await registerUser(email, password, name);
++      // ข้อจำกัดอาหาร: ตัด "อื่นๆ" ออก แล้วเติมข้อความที่พิมพ์เองเข้าไป
++      const allergies = restrictions.filter((r) => r !== "อื่นๆ");
++      if (otherText.trim()) allergies.push(otherText.trim());
++
++      const result = await registerUser(email, password, name, {
++        group,
++        healthGoal: goal,
++        allergies,
++      });
++
++      if (!result?.session) {
++        // Supabase เปิดให้ยืนยันอีเมลก่อน ยังเข้าแอปไม่ได้จนกว่าจะกดลิงก์ในอีเมล
++        Alert.alert(
++          "สมัครสมาชิกเรียบร้อย",
++          "เราส่งลิงก์ยืนยันไปที่อีเมลของคุณแล้ว กรุณายืนยันอีเมลก่อน แล้วกลับมาเข้าสู่ระบบ",
++          [{ text: "ตกลง", onPress: () => onBack && onBack() }],
++        );
++        return;
++      }
+ 
+       Alert.alert("สำเร็จ", "สมัครสมาชิกเรียบร้อยแล้ว!", [
+         {
+diff --git a/screens/ScanScreen.js b/screens/ScanScreen.js
+index 725fa9e..b7a6d00 100644
+--- a/screens/ScanScreen.js
++++ b/screens/ScanScreen.js
+@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
+ import * as ImagePicker from 'expo-image-picker';
+ import { colors } from '../theme';
+ import { matchPosts } from '../data/posts';
++import { findRestrictionHits } from '../data/profileOptions';
+ import { nutriText } from '../utils';
+ import {
+   isGeminiConfigured,
+@@ -37,6 +38,9 @@ const QUICK = [
+ 
+ export default function ScanScreen({
+   posts = [],
++  restrictions = [], // แพ้อาหาร/ข้อจำกัดอาหารของผู้ใช้ (จากโปรไฟล์)
++  userGroup = null,
++  healthGoal = null,
+   initialPrompt = '',
+   onSaveScan,
+   onOpenPost,
+@@ -172,6 +176,9 @@ export default function ScanScreen({
+           mimeType: media?.mimeType || 'image/jpeg',
+           manualIngredients: all,
+           prompt,
++          restrictions,
++          userGroup,
++          healthGoal,
+         });
+       }
+ 
+@@ -180,13 +187,31 @@ export default function ScanScreen({
+         new Set([...(aiData.detected_ingredients || []), ...all])
+       );
+ 
+-      // จับคู่กับโพสต์ที่มีในแอป
+-      const matches = matchPosts(posts, detected, prompt);
++      // กันซ้ำอีกชั้น: ตัดเมนู/โพสต์ที่มีส่วนผสมตรงกับอาหารที่ผู้ใช้แพ้หรือไม่กิน
++      // (นอกเหนือจากที่สั่งให้ AI เลี่ยงไว้ในคำสั่งแล้ว)
++      const allMenus = aiData.suggested_menus || [];
++      const aiMenus = allMenus.filter(
++        (m) =>
++          findRestrictionHits(
++            {
++              title: m.title,
++              ingredients: [...(m.used_ingredients || []), ...(m.missing_ingredients || [])],
++            },
++            restrictions
++          ).length === 0
++      );
++      const allMatches = matchPosts(posts, detected, prompt);
++      const matches = allMatches.filter(
++        (m) => findRestrictionHits(m.post, restrictions).length === 0
++      );
++      const filteredCount =
++        allMenus.length - aiMenus.length + (allMatches.length - matches.length);
+ 
+       const finalResult = {
+         detected,
+-        aiMenus: aiData.suggested_menus || [],
++        aiMenus,
+         matches,
++        filteredCount,
+         isDemo: isDemoResult,
+       };
+ 
+@@ -195,7 +220,7 @@ export default function ScanScreen({
+       // บันทึกลงประวัติการสแกน
+       if (onSaveScan) {
+         const savedMenus = [
+-          ...(aiData.suggested_menus || []).map((m) => `[AI] ${m.title}`),
++          ...aiMenus.map((m) => `[AI] ${m.title}`),
+           ...matches.slice(0, 3).map((m) => m.post.title || m.post.caption),
+         ];
+         onSaveScan({
+@@ -397,6 +422,15 @@ export default function ScanScreen({
+                 </View>
+               )}
+ 
++              {result.filteredCount > 0 && (
++                <View style={styles.note}>
++                  <Ionicons name="shield-checkmark-outline" size={20} color="#8D6E63" />
++                  <Text style={styles.noteText}>
++                    ซ่อน {result.filteredCount} เมนูที่มีส่วนผสมตรงกับอาหารที่คุณแพ้/ไม่กิน ({restrictions.join(', ')})
++                  </Text>
++                </View>
++              )}
++
+               {/* วัตถุดิบที่ตรวจพบ */}
+               <View style={styles.sectionHeader}>
+                 <Ionicons name="basket-outline" size={20} color={colors.primary} />
+diff --git a/screens/SearchScreen.js b/screens/SearchScreen.js
+index 47283b6..dc4a933 100644
+--- a/screens/SearchScreen.js
++++ b/screens/SearchScreen.js
+@@ -46,7 +46,7 @@ function CreatorCard({ item, isFollowing, onToggleFollow, onPress }) {
+   return (
+     <TouchableOpacity style={styles.creatorCard} activeOpacity={0.85} onPress={onPress}>
+       <View style={styles.creatorAvatar}>
+-        <Avatar emoji="🧑‍🍳" uri={item.avatarUrl} fontSize={30} />
++        <Avatar emoji={item.emoji || "🧑‍🍳"} uri={item.avatarUrl} fontSize={30} />
+       </View>
+       <Text style={styles.creatorName} numberOfLines={1}>
+         {item.name}
+-- 
+2.43.0
+

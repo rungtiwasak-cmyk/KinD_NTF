@@ -5,10 +5,9 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import Avatar from '../components/Avatar';
 import { colors } from '../theme';
+import { USER_GROUPS as GROUPS, ALLERGY_SUGGEST as SUGGEST } from '../data/profileOptions';
 
 const AVATARS = ['👩', '👨', '🧑', '👧', '👦', '👵', '👴', '👩‍🍳', '🧑‍🍳', '🐱', '🐶', '🦊'];
-const GROUPS = ['นักศึกษาหอพัก', 'แม่บ้าน', 'สายสุขภาพ-นักกีฬา', 'อื่นๆ'];
-const SUGGEST = ['กุ้ง', 'ถั่วลิสง', 'นม', 'ไข่', 'ถั่วเหลือง', 'ข้าวสาลี', 'หอย', 'ปลา', 'ไม่กินเผ็ด', 'มังสวิรัติ'];
 
 function Label({ children }) {
   return <Text style={styles.label}>{children}</Text>;
@@ -16,7 +15,7 @@ function Label({ children }) {
 
 export default function EditProfileScreen({ profile, onSave, onBack }) {
   const [name, setName] = useState(profile.name);
-  const [email, setEmail] = useState(profile.email);
+  const [bio, setBio] = useState(profile.bio || '');
   const [avatar, setAvatar] = useState(profile.avatar);
   // รูปโปรไฟล์ที่ผู้ใช้เลือกเอง: avatarUrl = รูปที่ใช้อยู่/พรีวิว, avatarPick = ไฟล์ใหม่ที่ยังไม่ได้อัปโหลด หรือ 'clear'
   const [avatarUrl, setAvatarUrl] = useState(profile.avatarUrl || null);
@@ -67,13 +66,12 @@ export default function EditProfileScreen({ profile, onSave, onBack }) {
   const save = async () => {
     const e = {};
     if (!name.trim()) e.name = 'กรุณากรอกชื่อ';
-    if (email.trim() && !/^\S+@\S+\.\S+$/.test(email.trim())) e.email = 'รูปแบบอีเมลไม่ถูกต้อง';
     setErrors(e);
     if (Object.keys(e).length > 0) return;
 
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), email: email.trim(), avatar, group, allergies, avatarPick });
+      await onSave({ name: name.trim(), bio: bio.trim(), avatar, group, allergies, avatarPick });
     } catch (err) {
       console.log('บันทึกโปรไฟล์ไม่สำเร็จ:', err);
       setErrors({ save: 'บันทึกไม่สำเร็จ: ' + (err?.message || 'โปรดลองอีกครั้ง') });
@@ -128,17 +126,22 @@ export default function EditProfileScreen({ profile, onSave, onBack }) {
         <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="ชื่อ-นามสกุล" placeholderTextColor={colors.muted} />
         {errors.name ? <Text style={styles.error}>{errors.name}</Text> : null}
 
-        <Label>อีเมล</Label>
+        <Label>ไบโอ</Label>
         <TextInput
-          style={styles.input}
-          value={email}
-          onChangeText={setEmail}
-          placeholder="อีเมล"
+          style={[styles.input, { minHeight: 80, textAlignVertical: 'top', paddingTop: 12 }]}
+          value={bio}
+          onChangeText={setBio}
+          placeholder="แนะนำตัวสั้นๆ ให้คนอื่นรู้จักคุณ"
           placeholderTextColor={colors.muted}
-          autoCapitalize="none"
-          keyboardType="email-address"
+          multiline
+          maxLength={160}
         />
-        {errors.email ? <Text style={styles.error}>{errors.email}</Text> : null}
+        <Text style={styles.counter}>{bio.length}/160</Text>
+
+        <Label>อีเมล (แก้ไขไม่ได้ ผูกกับบัญชีที่ล็อกอิน)</Label>
+        <View style={[styles.input, { justifyContent: 'center', backgroundColor: '#F5F0E8' }]}>
+          <Text style={{ color: colors.muted, fontSize: 14 }}>{profile.email || '-'}</Text>
+        </View>
 
         <Label>กลุ่มผู้ใช้ (เลือกได้ 1)</Label>
         <View style={styles.wrap}>
@@ -221,6 +224,7 @@ const styles = StyleSheet.create({
   label: { fontSize: 14, fontWeight: 'bold', color: colors.text, marginTop: 18, marginBottom: 8 },
   input: { backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 16, paddingHorizontal: 14, minHeight: 44, fontSize: 14 },
   error: { color: '#E53935', fontSize: 12, marginTop: 4 },
+  counter: { alignSelf: 'flex-end', fontSize: 11, color: colors.muted, marginTop: 4 },
   wrap: { flexDirection: 'row', flexWrap: 'wrap' },
   chip: { backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, marginRight: 8, marginBottom: 8 },
   chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },

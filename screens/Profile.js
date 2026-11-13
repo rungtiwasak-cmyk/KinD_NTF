@@ -77,6 +77,7 @@ export default function ProfileScreen({
           </View>
           <Text style={styles.name}>{profile.name}</Text>
           {profile.email ? <Text style={styles.email}>{profile.email}</Text> : null}
+          {profile.bio ? <Text style={styles.bio}>{profile.bio}</Text> : null}
 
           <TouchableOpacity style={styles.editBtn} activeOpacity={0.85} onPress={onEditProfile}>
             <Ionicons name="create-outline" size={16} color={COLORS.primary} />
@@ -110,9 +111,13 @@ export default function ProfileScreen({
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>กลุ่มผู้ใช้</Text>
-            <View style={styles.chip}>
-              <Text style={styles.chipText}>{profile.group}</Text>
-            </View>
+            {profile.group ? (
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>{profile.group}</Text>
+              </View>
+            ) : (
+              <Text style={styles.infoLabel}>ยังไม่ได้ตั้ง</Text>
+            )}
           </View>
 
           <View style={styles.infoRow}>
@@ -223,6 +228,7 @@ const styles = StyleSheet.create({
   avatarEmoji: { fontSize: 48 },
   name: { marginTop: 12, fontSize: 22, fontWeight: '800', color: '#FFFFFF' },
   email: { marginTop: 2, fontSize: 13, color: 'rgba(255,255,255,0.9)' },
+  bio: { marginTop: 8, marginHorizontal: 32, fontSize: 13, lineHeight: 19, color: '#FFFFFF', textAlign: 'center' },
   editBtn: {
     marginTop: 16,
     flexDirection: 'row',

@@ -3,9 +3,9 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ImageB
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
+import { HEALTH_GOALS } from '../data/profileOptions';
 
 const PRESETS = [1500, 1800, 2000, 2200, 2500];
-const HEALTH_GOALS = ['สร้างกล้ามเนื้อ (High Protein)', 'ควบคุมน้ำหนัก', 'ประหยัดงบ'];
 const MIN = 800;
 const MAX = 5000;
 
@@ -14,6 +14,8 @@ export default function GoalScreen({ profile, eaten, onSave, onBack }) {
   const [draft, setDraft] = useState(String(profile.calorieGoal));
   const [goal, setGoal] = useState(profile.healthGoal);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const timer = useRef(null);
 
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -34,9 +36,19 @@ export default function GoalScreen({ profile, eaten, onSave, onBack }) {
 
   const left = kcal - eaten;
 
-  const save = () => {
+  const save = async () => {
     const v = clamp(kcal);
-    onSave({ calorieGoal: v, healthGoal: goal });
+    setSaving(true);
+    setSaveError('');
+    try {
+      await onSave({ calorieGoal: v, healthGoal: goal });
+    } catch (err) {
+      console.log('บันทึกเป้าหมายไม่สำเร็จ:', err);
+      setSaveError('บันทึกไม่สำเร็จ: ' + (err?.message || 'โปรดลองอีกครั้ง'));
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
     setSaved(true);
     timer.current = setTimeout(onBack, 700);
   };
@@ -119,8 +131,10 @@ export default function GoalScreen({ profile, eaten, onSave, onBack }) {
           </View>
         )}
 
-        <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saved}>
-          <Text style={styles.saveText}>บันทึก</Text>
+        {saveError ? <Text style={{ color: '#E53935', fontSize: 12, marginBottom: 8 }}>{saveError}</Text> : null}
+
+        <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saved || saving}>
+          <Text style={styles.saveText}>{saving ? 'กำลังบันทึก...' : 'บันทึก'}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
