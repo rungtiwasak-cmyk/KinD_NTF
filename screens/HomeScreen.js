@@ -15,14 +15,7 @@ import Avatar from "../components/Avatar";
 import PostCard from "../components/PostCard";
 import { colors } from "../theme";
 import { nutriText } from "../utils";
-
-// ---------- ข้อมูลจำลอง ----------
-// เมนูแนะนำ: อ้างอิงโพสต์ด้วย postId (กดแล้วเปิดหน้าโพสต์ที่มีวิธีทำ)
-const RECOMMENDED = [
-  { postId: 1, ready: true },
-  { postId: 2, ready: false },
-  { postId: 3, ready: true },
-];
+import { buildRecommendations } from "../data/recommend";
 
 // ---------- ส่วนหัว ----------
 function Header({ name, avatar, avatarUrl, notifCount, onBell }) {
@@ -201,18 +194,20 @@ function RecommendCard({ post, ready, onPress, following, onToggleFollow }) {
           </Text>
         </TouchableOpacity>
       </View>
-      <View
-        style={[
-          styles.tagBox,
-          { backgroundColor: ready ? "#E8F5E9" : "#FFEBEE" },
-        ]}
-      >
-        <Text
-          style={[styles.tagText, { color: ready ? "#2E7D32" : "#C62828" }]}
+      {ready !== null && ready !== undefined && (
+        <View
+          style={[
+            styles.tagBox,
+            { backgroundColor: ready ? "#E8F5E9" : "#FFEBEE" },
+          ]}
         >
-          {ready ? "ทำได้เลย" : "ขาดวัตถุดิบ"}
-        </Text>
-      </View>
+          <Text
+            style={[styles.tagText, { color: ready ? "#2E7D32" : "#C62828" }]}
+          >
+            {ready ? "ทำได้เลย" : "ขาดวัตถุดิบ"}
+          </Text>
+        </View>
+      )}
       <Text style={styles.menuName} numberOfLines={1}>
         {post.title || post.caption}
       </Text>
@@ -228,7 +223,9 @@ export default function HomeScreen({
   posts = [],
   profile = { name: "", avatar: "" },
   calorieGoal = 2000,
-  eaten = 1400,
+  eaten = 0,
+  favs = {},
+  lastScan = null,
   unreadCount = 0,
   onToggleLike,
   onAddComment,
@@ -251,10 +248,13 @@ export default function HomeScreen({
   const topMenus = posts
     ? [...posts].sort((a, b) => b.likes - a.likes).slice(0, 10)
     : [];
-  const recs = RECOMMENDED.map((r) => ({
-    ...r,
-    post: posts.find((p) => p.id === r.postId),
-  })).filter((r) => r.post);
+  // เมนูแนะนำจากข้อมูลจริง: creator ที่ติดตาม, โพสต์ที่ไลก์/บันทึก, วัตถุดิบที่สแกนล่าสุด
+  const recs = buildRecommendations({
+    posts,
+    following,
+    favs,
+    detected: lastScan?.ingredients || [],
+  });
 
   return (
     <View style={styles.container}>
@@ -297,8 +297,13 @@ export default function HomeScreen({
 
           <SectionHead title="🍽️ เมนูแนะนำสำหรับคุณ" action="ดูทั้งหมด ›" />
           <Text style={styles.sectionSub}>
-            อิงจาก Creator ที่ follow, ค้นหา, และไลค์
+            อิงจาก Creator ที่ follow, โพสต์ที่ไลก์/บันทึก และวัตถุดิบที่สแกนล่าสุด
           </Text>
+          {recs.length === 0 && (
+            <Text style={{ color: colors.muted, marginVertical: 12 }}>
+              ยังไม่มีเมนูแนะนำ ลองติดตาม Creator หรือกดไลก์โพสต์ที่ชอบดูนะ
+            </Text>
+          )}
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {recs.map((r) => (
               <RecommendCard

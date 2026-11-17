@@ -110,12 +110,21 @@ export default function SearchScreen({
   onToggleLike,
   onOpenPost,
   onOpenCreator,
+  searchHistory = [],
+  onSaveSearch,
+  onRemoveSearch,
+  onClearSearches,
 }) {
   const [query, setQuery] = useState('');
   const [cat, setCat] = useState(null);
   const [region, setRegion] = useState(null);
 
   const q = query.trim().toLowerCase();
+
+  // บันทึกคำค้นลงประวัติ (ตอนกดค้นหา หรือกดเปิดผลลัพธ์)
+  const saveQuery = () => {
+    if (query.trim() && onSaveSearch) onSaveSearch(query.trim());
+  };
 
   const creators = allCreators.filter(
     (c) => !q || c.name.toLowerCase().includes(q)
@@ -168,6 +177,8 @@ export default function SearchScreen({
             placeholderTextColor={colors.muted}
             value={query}
             onChangeText={setQuery}
+            returnKeyType="search"
+            onSubmitEditing={saveQuery}
           />
           {query.length > 0 && (
             <TouchableOpacity onPress={() => setQuery('')}>
@@ -175,6 +186,32 @@ export default function SearchScreen({
             </TouchableOpacity>
           )}
         </View>
+
+        {/* ประวัติการค้นหา (บันทึกใน Supabase) */}
+        {searchHistory.length > 0 && !query.trim() && (
+          <View style={{ marginTop: 14 }}>
+            <View style={styles.sectionHead}>
+              <Text style={[styles.sectionTitle, { flex: 1 }]}>🕘 ค้นหาล่าสุด</Text>
+              <TouchableOpacity onPress={onClearSearches}>
+                <Text style={styles.clear}>ล้างทั้งหมด</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.chipWrap}>
+              {searchHistory.map((h) => (
+                <View key={h.id} style={styles.histChip}>
+                  <TouchableOpacity onPress={() => setQuery(h.keyword)}>
+                    <Text style={styles.chipText}>{h.keyword}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => onRemoveSearch(h.id)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="close" size={14} color={colors.muted} style={{ marginLeft: 6 }} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
 
         {/* Creator */}
         <View style={styles.sectionHead}>
@@ -188,7 +225,10 @@ export default function SearchScreen({
                 item={c}
                 isFollowing={!!following[c.id]}
                 onToggleFollow={onToggleFollow}
-                onPress={() => onOpenCreator(c.id)}
+                onPress={() => {
+                  saveQuery();
+                  onOpenCreator(c.id);
+                }}
               />
             ))}
           </ScrollView>
@@ -242,7 +282,10 @@ export default function SearchScreen({
               key={m.id}
               item={m}
               rank={i + 1}
-              onPress={() => onOpenPost(m.id)}
+              onPress={() => {
+                saveQuery();
+                onOpenPost(m.id);
+              }}
               onToggleLike={onToggleLike}
             />
           ))
@@ -301,6 +344,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  histChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, marginRight: 8, marginBottom: 8 },
   chipText: { color: colors.text, fontSize: 13 },
   chipTextOn: { color: '#fff', fontWeight: 'bold' },
 

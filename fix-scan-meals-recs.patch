@@ -1,0 +1,618 @@
+From d39e1586a2eb3e3d6ced771757b6ab4f4deff094 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 17 Nov 2026 15:35:25 +0700
+Subject: [PATCH] Persist scan history, meal logs (eaten today), real
+ recommendations
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01T6RCBwWvYEVom7cZFqwsRi
+---
+ data/recommend.js           |  47 +++++++++++++++++
+ lib/api.js                  | 100 ++++++++++++++++++++++++++++++++++++
+ screens/GoalScreen.js       |  64 ++++++++++++++++++++++-
+ screens/HomeScreen.js       |  55 +++++++++++---------
+ screens/MainScreen.js       |  92 ++++++++++++++++++++++++++-------
+ screens/PostDetailScreen.js |  51 ++++++++++++++++--
+ 6 files changed, 360 insertions(+), 49 deletions(-)
+ create mode 100644 data/recommend.js
+
+diff --git a/data/recommend.js b/data/recommend.js
+new file mode 100644
+index 0000000..8633b5c
+--- /dev/null
++++ b/data/recommend.js
+@@ -0,0 +1,47 @@
++// เมนูแนะนำ: คำนวณจากข้อมูลจริงของผู้ใช้ (ติดตาม / ไลก์ / Favorite / วัตถุดิบที่สแกนล่าสุด)
++// ไม่มีรายการสุ่มหรือค่าคงที่อีกต่อไป
++
++const norm = (s) => String(s || '').toLowerCase().trim();
++
++// ชื่อวัตถุดิบในโพสต์อาจมีปริมาณต่อท้าย เช่น "หมูสับ 100 g"
++// ถือว่ามีของแล้วถ้าชื่อที่สแกนเจออยู่ในข้อความนั้น (หรือกลับกัน)
++function hasIngredient(postIngredient, detected) {
++  const p = norm(postIngredient);
++  return detected.some((d) => {
++    const x = norm(d);
++    return x && (p.includes(x) || x.includes(p));
++  });
++}
++
++// คืน null ถ้ายังไม่เคยสแกนหรือโพสต์ไม่มีส่วนผสม (ไม่รู้ว่าพร้อมทำไหม)
++export function readyState(post, detected = []) {
++  if (!detected.length || !(post.ingredients || []).length) return null;
++  const have = post.ingredients.filter((i) => hasIngredient(i, detected)).length;
++  return have / post.ingredients.length >= 0.7;
++}
++
++export function buildRecommendations({ posts = [], following = {}, favs = {}, detected = [], limit = 6 }) {
++  const mine = (p) => p.mine;
++  const liked = posts.filter((p) => p.liked);
++  const favIds = new Set(Object.keys(favs).map(String));
++  const favPosts = posts.filter((p) => favIds.has(String(p.id)));
++
++  const likedCreators = new Set(liked.map((p) => p.creatorId));
++  const likedCats = new Set([...liked, ...favPosts].map((p) => p.category).filter(Boolean));
++
++  return posts
++    .filter((p) => !mine(p) && !(p.restrictionHits && p.restrictionHits.length))
++    .map((p) => {
++      const ready = readyState(p, detected);
++      let score = 0;
++      if (following[p.creatorId]) score += 4;
++      if (likedCreators.has(p.creatorId)) score += 2;
++      if (p.category && likedCats.has(p.category)) score += 2;
++      if (ready === true) score += 3;
++      if (p.liked) score -= 1; // เคยไลก์แล้ว ให้เมนูใหม่ๆ ขึ้นก่อน
++      score += Math.min(p.likes || 0, 100) / 100; // ใช้ยอดไลก์ตัดสินเมื่อคะแนนเท่ากัน
++      return { postId: p.id, post: p, ready, score };
++    })
++    .sort((a, b) => b.score - a.score)
++    .slice(0, limit);
++}
+diff --git a/lib/api.js b/lib/api.js
+index c7c5f16..8e9852d 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -753,3 +753,103 @@ export async function markAllNotificationsRead(userId) {
+     .eq("read", false);
+   if (error) throw error;
+ }
++
++// ---------------------------------------------------------------
++// ประวัติการสแกน (ตาราง scan_history)
++// ---------------------------------------------------------------
++function mapScanRow(r) {
++  return {
++    id: r.id,
++    at: new Date(r.created_at).getTime(),
++    prompt: r.prompt || "",
++    ingredients: Array.isArray(r.ingredients) ? r.ingredients : [],
++    menus: Array.isArray(r.menus) ? r.menus : [],
++    saved: true,
++  };
++}
++
++export async function fetchScanHistory(userId) {
++  const { data, error } = await supabase
++    .from("scan_history")
++    .select("id, prompt, ingredients, menus, created_at")
++    .eq("user_id", userId)
++    .order("created_at", { ascending: false })
++    .limit(50);
++  if (error) throw error;
++  return (data || []).map(mapScanRow);
++}
++
++export async function saveScanInDB(userId, scan) {
++  const { data, error } = await supabase
++    .from("scan_history")
++    .insert({
++      user_id: userId,
++      prompt: scan.prompt || "",
++      ingredients: scan.ingredients || [],
++      menus: scan.menus || [],
++    })
++    .select("id, prompt, ingredients, menus, created_at")
++    .single();
++  if (error) throw error;
++  return mapScanRow(data);
++}
++
++export async function deleteScanInDB(id, userId) {
++  const { error } = await supabase
++    .from("scan_history")
++    .delete()
++    .eq("id", id)
++    .eq("user_id", userId);
++  if (error) throw error;
++}
++
++// ---------------------------------------------------------------
++// บันทึกมื้ออาหาร / แคลอรี่ที่กินวันนี้ (ตาราง meal_logs)
++// ---------------------------------------------------------------
++function mapMealRow(r) {
++  return {
++    id: r.id,
++    postId: r.post_id,
++    title: r.title || "มื้ออาหาร",
++    kcal: Number(r.kcal) || 0,
++    at: new Date(r.eaten_at).getTime(),
++  };
++}
++
++// ดึงมื้อที่กินตั้งแต่เที่ยงคืนของวันนี้ (เวลาในเครื่องผู้ใช้)
++export async function fetchMealsToday(userId) {
++  const start = new Date();
++  start.setHours(0, 0, 0, 0);
++  const { data, error } = await supabase
++    .from("meal_logs")
++    .select("id, post_id, title, kcal, eaten_at")
++    .eq("user_id", userId)
++    .gte("eaten_at", start.toISOString())
++    .order("eaten_at", { ascending: false });
++  if (error) throw error;
++  return (data || []).map(mapMealRow);
++}
++
++export async function addMealInDB(userId, meal) {
++  const { data, error } = await supabase
++    .from("meal_logs")
++    .insert({
++      user_id: userId,
++      post_id: meal.postId != null ? String(meal.postId) : null,
++      title: meal.title || "มื้ออาหาร",
++      kcal: Math.round(Number(meal.kcal) || 0),
++    })
++    .select("id, post_id, title, kcal, eaten_at")
++    .single();
++  if (error) throw error;
++  return mapMealRow(data);
++}
++
++export async function deleteMealInDB(id, userId) {
++  const { error } = await supabase
++    .from("meal_logs")
++    .delete()
++    .eq("id", id)
++    .eq("user_id", userId);
++  if (error) throw error;
++}
+diff --git a/screens/GoalScreen.js b/screens/GoalScreen.js
+index 13829ff..1566634 100644
+--- a/screens/GoalScreen.js
++++ b/screens/GoalScreen.js
+@@ -9,7 +9,29 @@ const PRESETS = [1500, 1800, 2000, 2200, 2500];
+ const MIN = 800;
+ const MAX = 5000;
+ 
+-export default function GoalScreen({ profile, eaten, onSave, onBack }) {
++export default function GoalScreen({ profile, eaten = 0, meals = [], onAddMeal, onRemoveMeal, onSave, onBack }) {
++  const [mealName, setMealName] = useState('');
++  const [mealKcal, setMealKcal] = useState('');
++  const [mealBusy, setMealBusy] = useState(false);
++  const [mealError, setMealError] = useState('');
++
++  const addManualMeal = async () => {
++    const k = parseInt(mealKcal, 10);
++    if (!k || k <= 0) {
++      setMealError('ใส่แคลอรี่เป็นตัวเลขมากกว่า 0');
++      return;
++    }
++    setMealBusy(true);
++    setMealError('');
++    try {
++      await onAddMeal({ title: mealName.trim() || 'มื้ออาหาร', kcal: k });
++      setMealName('');
++      setMealKcal('');
++    } catch (err) {
++      setMealError('บันทึกไม่สำเร็จ: ' + (err?.message || 'ลองอีกครั้ง'));
++    }
++    setMealBusy(false);
++  };
+   const [kcal, setKcal] = useState(profile.calorieGoal);
+   const [draft, setDraft] = useState(String(profile.calorieGoal));
+   const [goal, setGoal] = useState(profile.healthGoal);
+@@ -108,6 +130,44 @@ export default function GoalScreen({ profile, eaten, onSave, onBack }) {
+           </Text>
+         </View>
+ 
++        <View style={styles.card}>
++          <Text style={styles.cardLabel}>มื้อที่กินวันนี้</Text>
++          {meals.length === 0 ? (
++            <Text style={styles.hint}>ยังไม่มีการบันทึก กด "บันทึกว่ากินมื้อนี้" ในหน้าโพสต์ หรือเพิ่มเองด้านล่าง</Text>
++          ) : (
++            meals.map((m) => (
++              <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
++                <Text style={{ flex: 1, color: colors.text, fontSize: 14 }} numberOfLines={1}>{m.title}</Text>
++                <Text style={{ color: colors.text, fontWeight: 'bold', marginRight: 10 }}>{m.kcal} kcal</Text>
++                <TouchableOpacity onPress={() => onRemoveMeal(m.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
++                  <Ionicons name="trash-outline" size={18} color={colors.muted} />
++                </TouchableOpacity>
++              </View>
++            ))
++          )}
++          <View style={{ flexDirection: 'row', marginTop: 10 }}>
++            <TextInput
++              style={[styles.mealInput, { flex: 1 }]}
++              value={mealName}
++              onChangeText={setMealName}
++              placeholder="ชื่อมื้อ (ไม่บังคับ)"
++              placeholderTextColor={colors.muted}
++            />
++            <TextInput
++              style={[styles.mealInput, { width: 80, marginLeft: 8 }]}
++              value={mealKcal}
++              onChangeText={(t) => setMealKcal(t.replace(/[^0-9]/g, ''))}
++              placeholder="kcal"
++              placeholderTextColor={colors.muted}
++              keyboardType="number-pad"
++            />
++            <TouchableOpacity style={styles.mealAdd} onPress={addManualMeal} disabled={mealBusy}>
++              <Ionicons name="add" size={22} color="#fff" />
++            </TouchableOpacity>
++          </View>
++          {mealError ? <Text style={{ color: '#E53935', fontSize: 12, marginTop: 6 }}>{mealError}</Text> : null}
++        </View>
++
+         <View style={styles.card}>
+           <Text style={styles.cardLabel}>เป้าหมายสุขภาพ (ให้ AI ใช้แนะนำเมนู)</Text>
+           <View style={styles.presetWrap}>
+@@ -172,6 +232,8 @@ const styles = StyleSheet.create({
+   presetOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+   presetText: { color: colors.text, fontSize: 13 },
+   presetTextOn: { color: '#fff', fontWeight: 'bold' },
++  mealInput: { backgroundColor: '#FFF8F0', borderWidth: 1, borderColor: colors.border, borderRadius: 14, paddingHorizontal: 12, height: 44, fontSize: 14 },
++  mealAdd: { marginLeft: 8, width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+   today: { color: colors.muted, fontSize: 12, textAlign: 'center', marginTop: 8 },
+   hint: { color: colors.muted, fontSize: 11, marginTop: 4 },
+   banner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9', borderRadius: 14, padding: 10, marginBottom: 10 },
+diff --git a/screens/HomeScreen.js b/screens/HomeScreen.js
+index 0d7c618..cd500d5 100644
+--- a/screens/HomeScreen.js
++++ b/screens/HomeScreen.js
+@@ -15,14 +15,7 @@ import Avatar from "../components/Avatar";
+ import PostCard from "../components/PostCard";
+ import { colors } from "../theme";
+ import { nutriText } from "../utils";
+-
+-// ---------- ข้อมูลจำลอง ----------
+-// เมนูแนะนำ: อ้างอิงโพสต์ด้วย postId (กดแล้วเปิดหน้าโพสต์ที่มีวิธีทำ)
+-const RECOMMENDED = [
+-  { postId: 1, ready: true },
+-  { postId: 2, ready: false },
+-  { postId: 3, ready: true },
+-];
++import { buildRecommendations } from "../data/recommend";
+ 
+ // ---------- ส่วนหัว ----------
+ function Header({ name, avatar, avatarUrl, notifCount, onBell }) {
+@@ -201,18 +194,20 @@ function RecommendCard({ post, ready, onPress, following, onToggleFollow }) {
+           </Text>
+         </TouchableOpacity>
+       </View>
+-      <View
+-        style={[
+-          styles.tagBox,
+-          { backgroundColor: ready ? "#E8F5E9" : "#FFEBEE" },
+-        ]}
+-      >
+-        <Text
+-          style={[styles.tagText, { color: ready ? "#2E7D32" : "#C62828" }]}
++      {ready !== null && ready !== undefined && (
++        <View
++          style={[
++            styles.tagBox,
++            { backgroundColor: ready ? "#E8F5E9" : "#FFEBEE" },
++          ]}
+         >
+-          {ready ? "ทำได้เลย" : "ขาดวัตถุดิบ"}
+-        </Text>
+-      </View>
++          <Text
++            style={[styles.tagText, { color: ready ? "#2E7D32" : "#C62828" }]}
++          >
++            {ready ? "ทำได้เลย" : "ขาดวัตถุดิบ"}
++          </Text>
++        </View>
++      )}
+       <Text style={styles.menuName} numberOfLines={1}>
+         {post.title || post.caption}
+       </Text>
+@@ -228,7 +223,9 @@ export default function HomeScreen({
+   posts = [],
+   profile = { name: "", avatar: "" },
+   calorieGoal = 2000,
+-  eaten = 1400,
++  eaten = 0,
++  favs = {},
++  lastScan = null,
+   unreadCount = 0,
+   onToggleLike,
+   onAddComment,
+@@ -251,10 +248,13 @@ export default function HomeScreen({
+   const topMenus = posts
+     ? [...posts].sort((a, b) => b.likes - a.likes).slice(0, 10)
+     : [];
+-  const recs = RECOMMENDED.map((r) => ({
+-    ...r,
+-    post: posts.find((p) => p.id === r.postId),
+-  })).filter((r) => r.post);
++  // เมนูแนะนำจากข้อมูลจริง: creator ที่ติดตาม, โพสต์ที่ไลก์/บันทึก, วัตถุดิบที่สแกนล่าสุด
++  const recs = buildRecommendations({
++    posts,
++    following,
++    favs,
++    detected: lastScan?.ingredients || [],
++  });
+ 
+   return (
+     <View style={styles.container}>
+@@ -297,8 +297,13 @@ export default function HomeScreen({
+ 
+           <SectionHead title="🍽️ เมนูแนะนำสำหรับคุณ" action="ดูทั้งหมด ›" />
+           <Text style={styles.sectionSub}>
+-            อิงจาก Creator ที่ follow, ค้นหา, และไลค์
++            อิงจาก Creator ที่ follow, โพสต์ที่ไลก์/บันทึก และวัตถุดิบที่สแกนล่าสุด
+           </Text>
++          {recs.length === 0 && (
++            <Text style={{ color: colors.muted, marginVertical: 12 }}>
++              ยังไม่มีเมนูแนะนำ ลองติดตาม Creator หรือกดไลก์โพสต์ที่ชอบดูนะ
++            </Text>
++          )}
+           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+             {recs.map((r) => (
+               <RecommendCard
+diff --git a/screens/MainScreen.js b/screens/MainScreen.js
+index 5b9db7d..a31f218 100644
+--- a/screens/MainScreen.js
++++ b/screens/MainScreen.js
+@@ -11,13 +11,18 @@ import BottomTabs from "../components/BottomTabs";
+ import {
+   addCommentInDB,
+   clearAvatar,
++  addMealInDB,
+   createCollectionInDB,
+   createPostInDB,
++  deleteMealInDB,
+   deletePostInDB,
++  deleteScanInDB,
+   fetchCollections,
+   fetchCreators,
+   fetchFavorites,
+   fetchFollows,
++  fetchMealsToday,
++  fetchScanHistory,
+   fetchMyProfile,
+   fetchNotifications,
+   fetchPosts,
+@@ -29,6 +34,7 @@ import {
+   removeFavorite,
+   saveFavorite,
+   saveMyProfile,
++  saveScanInDB,
+   signOutUser,
+   unfollowUser,
+   unlikePost,
+@@ -55,8 +61,6 @@ import ScanHistoryScreen from "./ScanHistoryScreen";
+ import OnboardingScreen from "./OnboardingScreen";
+ import ScanScreen from "./ScanScreen";
+ 
+-const EATEN_TODAY = 1400; // ข้อมูลจำลอง (ยังไม่มีระบบบันทึกมื้ออาหาร)
+-
+ // ค่าเริ่มต้นก่อนโหลดโปรไฟล์จริงจาก Supabase (ไม่ใช้ข้อมูลตัวอย่างปลอมอีกต่อไป)
+ const INITIAL_PROFILE = {
+   name: "",
+@@ -78,6 +82,7 @@ export default function MainScreen({ onLogout }) {
+   const [profile, setProfile] = useState(INITIAL_PROFILE);
+   const [notifications, setNotifications] = useState([]);
+   const [scanHistory, setScanHistory] = useState([]);
++  const [meals, setMeals] = useState([]); // มื้อที่กินวันนี้ (meal_logs)
+   const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
+   const [profileLoaded, setProfileLoaded] = useState(false); // โหลดโปรไฟล์จาก DB เสร็จแล้วหรือยัง
+   const [needsOnboarding, setNeedsOnboarding] = useState(false); // ยังไม่เคยตั้งค่าโปรไฟล์ครั้งแรก
+@@ -112,13 +117,19 @@ export default function MainScreen({ onLogout }) {
+ 
+     // โหลดข้อมูลเสริมจาก Supabase (แต่ละอย่างพังแยกกัน ไม่ทำให้แอปทั้งหมดพัง)
+     const loadExtras = async (uid) => {
+-      const [cr, fo, fa, co] = await Promise.allSettled([
++      const [cr, fo, fa, co, sh, ml] = await Promise.allSettled([
+         fetchCreators(),
+         fetchFollows(),
+         fetchFavorites(uid),
+         fetchCollections(uid),
++        fetchScanHistory(uid),
++        fetchMealsToday(uid),
+       ]);
+       if (cancelled) return;
++      if (sh.status === "fulfilled") setScanHistory(sh.value);
++      else console.log("โหลดประวัติสแกนไม่สำเร็จ:", sh.reason?.message);
++      if (ml.status === "fulfilled") setMeals(ml.value);
++      else console.log("โหลดมื้ออาหารไม่สำเร็จ:", ml.reason?.message);
+       if (cr.status === "fulfilled") setCreators(cr.value);
+       else console.log("โหลดรายชื่อ creator ไม่สำเร็จ:", cr.reason?.message);
+       if (fo.status === "fulfilled") setFollows(fo.value);
+@@ -423,20 +434,59 @@ export default function MainScreen({ onLogout }) {
+   };
+ 
+   // ---------- ประวัติการสแกน ----------
+-  const addScan = (scan) =>
+-    setScanHistory((prev) => [
+-      {
+-        id: Date.now(),
+-        at: Date.now(),
+-        prompt: "",
+-        ingredients: [],
+-        menus: [],
+-        ...scan,
+-      },
+-      ...prev,
+-    ]);
+-  const deleteScan = (id) =>
++  const addScan = async (scan) => {
++    const local = {
++      id: `tmp-${Date.now()}`,
++      at: Date.now(),
++      prompt: "",
++      ingredients: [],
++      menus: [],
++      saved: false,
++      ...scan,
++    };
++    setScanHistory((prev) => [local, ...prev]); // แสดงทันที แล้วค่อยบันทึกลง DB
++    if (!userId) return;
++    try {
++      const row = await saveScanInDB(userId, local);
++      setScanHistory((prev) => prev.map((s) => (s.id === local.id ? row : s)));
++    } catch (e) {
++      console.log("บันทึกประวัติสแกนไม่สำเร็จ:", e?.message);
++    }
++  };
++  const deleteScan = async (id) => {
++    const removed = scanHistory.find((s) => s.id === id);
+     setScanHistory((prev) => prev.filter((s) => s.id !== id));
++    if (!userId || !removed?.saved) return;
++    try {
++      await deleteScanInDB(id, userId);
++    } catch (e) {
++      console.log("ลบประวัติสแกนไม่สำเร็จ:", e?.message);
++      setScanHistory((prev) =>
++        [...prev, removed].sort((a, b) => b.at - a.at),
++      );
++    }
++  };
++
++  // ---------- แคลอรี่ที่กินวันนี้ ----------
++  const startOfToday = new Date().setHours(0, 0, 0, 0);
++  const todayMeals = meals.filter((m) => m.at >= startOfToday);
++  const eatenToday = todayMeals.reduce((sum, m) => sum + m.kcal, 0);
++
++  const logMeal = async ({ postId = null, title, kcal }) => {
++    const uid = await requireUserId();
++    const row = await addMealInDB(uid, { postId, title, kcal });
++    setMeals((prev) => [row, ...prev]);
++  };
++  const removeMeal = async (id) => {
++    const removed = meals.find((m) => m.id === id);
++    setMeals((prev) => prev.filter((m) => m.id !== id));
++    try {
++      await deleteMealInDB(id, userId);
++    } catch (e) {
++      console.log("ลบมื้ออาหารไม่สำเร็จ:", e?.message);
++      if (removed) setMeals((prev) => [removed, ...prev]);
++    }
++  };
+ 
+   // ---------- แจ้งเตือน ----------
+   const unreadCount = notifications.filter((n) => !n.read).length;
+@@ -582,6 +632,7 @@ export default function MainScreen({ onLogout }) {
+         return (
+           <PostDetailScreen
+             post={viewPosts.find((p) => p.id === top.params.postId)}
++            onLogMeal={logMeal}
+             onToggleLike={toggleLike}
+             onAddComment={addComment}
+             favApi={favApi}
+@@ -652,7 +703,10 @@ export default function MainScreen({ onLogout }) {
+         return (
+           <GoalScreen
+             profile={profile}
+-            eaten={EATEN_TODAY}
++            eaten={eatenToday}
++            meals={todayMeals}
++            onAddMeal={logMeal}
++            onRemoveMeal={removeMeal}
+             onSave={saveGoal}
+             onBack={pop}
+           />
+@@ -710,7 +764,9 @@ export default function MainScreen({ onLogout }) {
+             posts={viewPosts}
+             profile={profile}
+             calorieGoal={profile.calorieGoal}
+-            eaten={EATEN_TODAY}
++            eaten={eatenToday}
++            favs={favs}
++            lastScan={scanHistory[0] || null}
+             unreadCount={unreadCount}
+             onToggleLike={toggleLike}
+             onAddComment={addComment}
+diff --git a/screens/PostDetailScreen.js b/screens/PostDetailScreen.js
+index da910c1..8586d48 100644
+--- a/screens/PostDetailScreen.js
++++ b/screens/PostDetailScreen.js
+@@ -1,12 +1,29 @@
+-import React from 'react';
+-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ImageBackground } from 'react-native';
++import React, { useState } from 'react';
++import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ImageBackground, ActivityIndicator } from 'react-native';
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+ import PostCard from '../components/PostCard';
+ 
+ // หน้ารายละเอียดโพสต์/เมนู: แสดงเป็นโพสต์ พร้อมกางส่วนผสมและวิธีทำให้เลย
+-export default function PostDetailScreen({ post, onToggleLike, onAddComment, favApi, onOpenCreator, onBack }) {
++export default function PostDetailScreen({ post, onLogMeal, onToggleLike, onAddComment, favApi, onOpenCreator, onBack }) {
++  const [logging, setLogging] = useState(false);
++  const [logMsg, setLogMsg] = useState('');
++  const kcal = post ? parseInt(String(post.kcal || '').replace(/[^0-9]/g, ''), 10) || 0 : 0;
++
++  // บันทึกว่ากินเมนูนี้แล้ว -> รวมเข้าแคลอรี่วันนี้ (บันทึกลง DB)
++  const logThis = async () => {
++    setLogging(true);
++    setLogMsg('');
++    try {
++      await onLogMeal({ postId: post.id, title: post.title || post.caption || 'มื้ออาหาร', kcal });
++      setLogMsg(`บันทึกแล้ว +${kcal} kcal ✓`);
++    } catch (err) {
++      console.log('บันทึกมื้ออาหารไม่สำเร็จ:', err);
++      setLogMsg('บันทึกไม่สำเร็จ: ' + (err?.message || 'ลองอีกครั้ง'));
++    }
++    setLogging(false);
++  };
+   return (
+     <ImageBackground
+       source={require('../assets/bg_detail.jpg')} 
+@@ -31,9 +48,30 @@ export default function PostDetailScreen({ post, onToggleLike, onAddComment, fav
+             onOpenCreator={onOpenCreator}
+             defaultOpen
+           />
+-        ) : (
++        ) : null}
++        {post && onLogMeal ? (
++          <View style={{ marginTop: 4 }}>
++            <TouchableOpacity
++              style={[styles.logBtn, (kcal <= 0 || logging) && { opacity: 0.5 }]}
++              onPress={logThis}
++              disabled={kcal <= 0 || logging}
++              activeOpacity={0.85}
++            >
++              {logging ? (
++                <ActivityIndicator color="#fff" />
++              ) : (
++                <Text style={styles.logBtnText}>
++                  🍽️ บันทึกว่ากินมื้อนี้{kcal > 0 ? ` (~${kcal} kcal)` : ''}
++                </Text>
++              )}
++            </TouchableOpacity>
++            {kcal <= 0 ? <Text style={styles.logMsg}>โพสต์นี้ไม่ได้ระบุแคลอรี่ จึงบันทึกไม่ได้</Text> : null}
++            {logMsg ? <Text style={styles.logMsg}>{logMsg}</Text> : null}
++          </View>
++        ) : null}
++        {!post ? (
+           <Text style={styles.empty}>ไม่พบโพสต์นี้แล้ว (อาจถูกลบไปแล้ว)</Text>
+-        )}
++        ) : null}
+       </ScrollView>
+     </SafeAreaView>
+     </ImageBackground>
+@@ -61,4 +99,7 @@ const styles = StyleSheet.create({
+   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 12 },
+   title: { flex: 1, fontSize: 20, fontWeight: 'bold', color: colors.text, marginLeft: 6 },
+   empty: { textAlign: 'center', color: colors.muted, marginTop: 40 },
++  logBtn: { backgroundColor: colors.primary, borderRadius: 30, height: 48, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
++  logBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
++  logMsg: { textAlign: 'center', color: colors.muted, fontSize: 12, marginTop: 6 },
+ });
+-- 
+2.43.0
+

@@ -1,0 +1,304 @@
+From 3b696daea9fff76c8113ae53f8b87077dfa1ade4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 17 Nov 2026 16:17:00 +0700
+Subject: [PATCH] Search history in DB, migrate ai_scans_history
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01T6RCBwWvYEVom7cZFqwsRi
+---
+ lib/api.js              | 59 +++++++++++++++++++++++++++++++++++++++++
+ screens/MainScreen.js   | 53 +++++++++++++++++++++++++++++++++++-
+ screens/SearchScreen.js | 48 +++++++++++++++++++++++++++++++--
+ 3 files changed, 157 insertions(+), 3 deletions(-)
+
+diff --git a/lib/api.js b/lib/api.js
+index 8e9852d..623f94d 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -853,3 +853,62 @@ export async function deleteMealInDB(id, userId) {
+     .eq("user_id", userId);
+   if (error) throw error;
+ }
++
++// ---------------------------------------------------------------
++// ประวัติการค้นหา (ตาราง search_history: search_id, user_id, keyword, created_at)
++// ---------------------------------------------------------------
++export async function fetchSearchHistory(userId) {
++  const { data, error } = await supabase
++    .from("search_history")
++    .select("search_id, keyword, created_at")
++    .eq("user_id", userId)
++    .order("created_at", { ascending: false })
++    .limit(30);
++  if (error) throw error;
++  // คำเดียวกันที่ค้นซ้ำ เก็บเฉพาะอันล่าสุด
++  const seen = new Set();
++  return (data || [])
++    .filter((r) => {
++      const k = String(r.keyword).toLowerCase();
++      if (seen.has(k)) return false;
++      seen.add(k);
++      return true;
++    })
++    .slice(0, 10)
++    .map((r) => ({ id: r.search_id, keyword: r.keyword }));
++}
++
++export async function saveSearchKeyword(userId, keyword) {
++  const kw = String(keyword || "").trim();
++  if (!kw) return null;
++  // ลบคำเดิมที่ซ้ำก่อน แล้วเพิ่มใหม่ให้ขึ้นเป็นล่าสุด
++  await supabase
++    .from("search_history")
++    .delete()
++    .eq("user_id", userId)
++    .ilike("keyword", kw.replace(/[%_]/g, (c) => "\\" + c));
++  const { data, error } = await supabase
++    .from("search_history")
++    .insert({ user_id: userId, keyword: kw })
++    .select("search_id, keyword")
++    .single();
++  if (error) throw error;
++  return { id: data.search_id, keyword: data.keyword };
++}
++
++export async function deleteSearchKeyword(searchId, userId) {
++  const { error } = await supabase
++    .from("search_history")
++    .delete()
++    .eq("search_id", searchId)
++    .eq("user_id", userId);
++  if (error) throw error;
++}
++
++export async function clearSearchHistory(userId) {
++  const { error } = await supabase
++    .from("search_history")
++    .delete()
++    .eq("user_id", userId);
++  if (error) throw error;
++}
+diff --git a/screens/MainScreen.js b/screens/MainScreen.js
+index a31f218..7facd29 100644
+--- a/screens/MainScreen.js
++++ b/screens/MainScreen.js
+@@ -12,17 +12,20 @@ import {
+   addCommentInDB,
+   clearAvatar,
+   addMealInDB,
++  clearSearchHistory,
+   createCollectionInDB,
+   createPostInDB,
+   deleteMealInDB,
+   deletePostInDB,
+   deleteScanInDB,
++  deleteSearchKeyword,
+   fetchCollections,
+   fetchCreators,
+   fetchFavorites,
+   fetchFollows,
+   fetchMealsToday,
+   fetchScanHistory,
++  fetchSearchHistory,
+   fetchMyProfile,
+   fetchNotifications,
+   fetchPosts,
+@@ -35,6 +38,7 @@ import {
+   saveFavorite,
+   saveMyProfile,
+   saveScanInDB,
++  saveSearchKeyword,
+   signOutUser,
+   unfollowUser,
+   unlikePost,
+@@ -82,6 +86,7 @@ export default function MainScreen({ onLogout }) {
+   const [profile, setProfile] = useState(INITIAL_PROFILE);
+   const [notifications, setNotifications] = useState([]);
+   const [scanHistory, setScanHistory] = useState([]);
++  const [searchHistory, setSearchHistory] = useState([]); // คำที่เคยค้นหา (search_history)
+   const [meals, setMeals] = useState([]); // มื้อที่กินวันนี้ (meal_logs)
+   const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
+   const [profileLoaded, setProfileLoaded] = useState(false); // โหลดโปรไฟล์จาก DB เสร็จแล้วหรือยัง
+@@ -117,17 +122,20 @@ export default function MainScreen({ onLogout }) {
+ 
+     // โหลดข้อมูลเสริมจาก Supabase (แต่ละอย่างพังแยกกัน ไม่ทำให้แอปทั้งหมดพัง)
+     const loadExtras = async (uid) => {
+-      const [cr, fo, fa, co, sh, ml] = await Promise.allSettled([
++      const [cr, fo, fa, co, sh, ml, sr] = await Promise.allSettled([
+         fetchCreators(),
+         fetchFollows(),
+         fetchFavorites(uid),
+         fetchCollections(uid),
+         fetchScanHistory(uid),
+         fetchMealsToday(uid),
++        fetchSearchHistory(uid),
+       ]);
+       if (cancelled) return;
+       if (sh.status === "fulfilled") setScanHistory(sh.value);
+       else console.log("โหลดประวัติสแกนไม่สำเร็จ:", sh.reason?.message);
++      if (sr.status === "fulfilled") setSearchHistory(sr.value);
++      else console.log("โหลดประวัติค้นหาไม่สำเร็จ:", sr.reason?.message);
+       if (ml.status === "fulfilled") setMeals(ml.value);
+       else console.log("โหลดมื้ออาหารไม่สำเร็จ:", ml.reason?.message);
+       if (cr.status === "fulfilled") setCreators(cr.value);
+@@ -467,6 +475,45 @@ export default function MainScreen({ onLogout }) {
+     }
+   };
+ 
++  // ---------- ประวัติการค้นหา ----------
++  const addSearch = async (keyword) => {
++    const kw = String(keyword || "").trim();
++    if (!kw || !userId) return;
++    // แสดงทันที (คำซ้ำย้ายขึ้นบนสุด) แล้วค่อยบันทึกลง DB
++    const tmpId = `tmp-${Date.now()}`;
++    setSearchHistory((prev) =>
++      [{ id: tmpId, keyword: kw }, ...prev.filter((s) => s.keyword.toLowerCase() !== kw.toLowerCase())].slice(0, 10),
++    );
++    try {
++      const row = await saveSearchKeyword(userId, kw);
++      if (row) setSearchHistory((prev) => prev.map((s) => (s.id === tmpId ? row : s)));
++    } catch (e) {
++      console.log("บันทึกประวัติค้นหาไม่สำเร็จ:", e?.message);
++    }
++  };
++  const removeSearch = async (id) => {
++    const removed = searchHistory.find((s) => s.id === id);
++    setSearchHistory((prev) => prev.filter((s) => s.id !== id));
++    if (!userId || String(id).startsWith("tmp-")) return;
++    try {
++      await deleteSearchKeyword(id, userId);
++    } catch (e) {
++      console.log("ลบประวัติค้นหาไม่สำเร็จ:", e?.message);
++      if (removed) setSearchHistory((prev) => [removed, ...prev]);
++    }
++  };
++  const clearSearches = async () => {
++    const old = searchHistory;
++    setSearchHistory([]);
++    if (!userId) return;
++    try {
++      await clearSearchHistory(userId);
++    } catch (e) {
++      console.log("ล้างประวัติค้นหาไม่สำเร็จ:", e?.message);
++      setSearchHistory(old);
++    }
++  };
++
+   // ---------- แคลอรี่ที่กินวันนี้ ----------
+   const startOfToday = new Date().setHours(0, 0, 0, 0);
+   const todayMeals = meals.filter((m) => m.at >= startOfToday);
+@@ -788,6 +835,10 @@ export default function MainScreen({ onLogout }) {
+             onToggleLike={toggleLike}
+             onOpenPost={openPost}
+             onOpenCreator={openCreator}
++            searchHistory={searchHistory}
++            onSaveSearch={addSearch}
++            onRemoveSearch={removeSearch}
++            onClearSearches={clearSearches}
+           />
+         )}
+         {tab === "post" && (
+diff --git a/screens/SearchScreen.js b/screens/SearchScreen.js
+index dc4a933..898dc80 100644
+--- a/screens/SearchScreen.js
++++ b/screens/SearchScreen.js
+@@ -110,6 +110,10 @@ export default function SearchScreen({
+   onToggleLike,
+   onOpenPost,
+   onOpenCreator,
++  searchHistory = [],
++  onSaveSearch,
++  onRemoveSearch,
++  onClearSearches,
+ }) {
+   const [query, setQuery] = useState('');
+   const [cat, setCat] = useState(null);
+@@ -117,6 +121,11 @@ export default function SearchScreen({
+ 
+   const q = query.trim().toLowerCase();
+ 
++  // บันทึกคำค้นลงประวัติ (ตอนกดค้นหา หรือกดเปิดผลลัพธ์)
++  const saveQuery = () => {
++    if (query.trim() && onSaveSearch) onSaveSearch(query.trim());
++  };
++
+   const creators = allCreators.filter(
+     (c) => !q || c.name.toLowerCase().includes(q)
+   );
+@@ -168,6 +177,8 @@ export default function SearchScreen({
+             placeholderTextColor={colors.muted}
+             value={query}
+             onChangeText={setQuery}
++            returnKeyType="search"
++            onSubmitEditing={saveQuery}
+           />
+           {query.length > 0 && (
+             <TouchableOpacity onPress={() => setQuery('')}>
+@@ -176,6 +187,32 @@ export default function SearchScreen({
+           )}
+         </View>
+ 
++        {/* ประวัติการค้นหา (บันทึกใน Supabase) */}
++        {searchHistory.length > 0 && !query.trim() && (
++          <View style={{ marginTop: 14 }}>
++            <View style={styles.sectionHead}>
++              <Text style={[styles.sectionTitle, { flex: 1 }]}>🕘 ค้นหาล่าสุด</Text>
++              <TouchableOpacity onPress={onClearSearches}>
++                <Text style={styles.clear}>ล้างทั้งหมด</Text>
++              </TouchableOpacity>
++            </View>
++            <View style={styles.chipWrap}>
++              {searchHistory.map((h) => (
++                <View key={h.id} style={styles.histChip}>
++                  <TouchableOpacity onPress={() => setQuery(h.keyword)}>
++                    <Text style={styles.chipText}>{h.keyword}</Text>
++                  </TouchableOpacity>
++                  <TouchableOpacity
++                    onPress={() => onRemoveSearch(h.id)}
++                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
++                    <Ionicons name="close" size={14} color={colors.muted} style={{ marginLeft: 6 }} />
++                  </TouchableOpacity>
++                </View>
++              ))}
++            </View>
++          </View>
++        )}
++
+         {/* Creator */}
+         <View style={styles.sectionHead}>
+           <Text style={styles.sectionTitle}>👩‍🍳 Creator แนะนำ</Text>
+@@ -188,7 +225,10 @@ export default function SearchScreen({
+                 item={c}
+                 isFollowing={!!following[c.id]}
+                 onToggleFollow={onToggleFollow}
+-                onPress={() => onOpenCreator(c.id)}
++                onPress={() => {
++                  saveQuery();
++                  onOpenCreator(c.id);
++                }}
+               />
+             ))}
+           </ScrollView>
+@@ -242,7 +282,10 @@ export default function SearchScreen({
+               key={m.id}
+               item={m}
+               rank={i + 1}
+-              onPress={() => onOpenPost(m.id)}
++              onPress={() => {
++                saveQuery();
++                onOpenPost(m.id);
++              }}
+               onToggleLike={onToggleLike}
+             />
+           ))
+@@ -301,6 +344,7 @@ const styles = StyleSheet.create({
+     marginBottom: 8,
+   },
+   chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
++  histChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, marginRight: 8, marginBottom: 8 },
+   chipText: { color: colors.text, fontSize: 13 },
+   chipTextOn: { color: '#fff', fontWeight: 'bold' },
+ 
+-- 
+2.43.0
+

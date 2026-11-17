@@ -9,7 +9,29 @@ const PRESETS = [1500, 1800, 2000, 2200, 2500];
 const MIN = 800;
 const MAX = 5000;
 
-export default function GoalScreen({ profile, eaten, onSave, onBack }) {
+export default function GoalScreen({ profile, eaten = 0, meals = [], onAddMeal, onRemoveMeal, onSave, onBack }) {
+  const [mealName, setMealName] = useState('');
+  const [mealKcal, setMealKcal] = useState('');
+  const [mealBusy, setMealBusy] = useState(false);
+  const [mealError, setMealError] = useState('');
+
+  const addManualMeal = async () => {
+    const k = parseInt(mealKcal, 10);
+    if (!k || k <= 0) {
+      setMealError('ใส่แคลอรี่เป็นตัวเลขมากกว่า 0');
+      return;
+    }
+    setMealBusy(true);
+    setMealError('');
+    try {
+      await onAddMeal({ title: mealName.trim() || 'มื้ออาหาร', kcal: k });
+      setMealName('');
+      setMealKcal('');
+    } catch (err) {
+      setMealError('บันทึกไม่สำเร็จ: ' + (err?.message || 'ลองอีกครั้ง'));
+    }
+    setMealBusy(false);
+  };
   const [kcal, setKcal] = useState(profile.calorieGoal);
   const [draft, setDraft] = useState(String(profile.calorieGoal));
   const [goal, setGoal] = useState(profile.healthGoal);
@@ -109,6 +131,44 @@ export default function GoalScreen({ profile, eaten, onSave, onBack }) {
         </View>
 
         <View style={styles.card}>
+          <Text style={styles.cardLabel}>มื้อที่กินวันนี้</Text>
+          {meals.length === 0 ? (
+            <Text style={styles.hint}>ยังไม่มีการบันทึก กด "บันทึกว่ากินมื้อนี้" ในหน้าโพสต์ หรือเพิ่มเองด้านล่าง</Text>
+          ) : (
+            meals.map((m) => (
+              <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
+                <Text style={{ flex: 1, color: colors.text, fontSize: 14 }} numberOfLines={1}>{m.title}</Text>
+                <Text style={{ color: colors.text, fontWeight: 'bold', marginRight: 10 }}>{m.kcal} kcal</Text>
+                <TouchableOpacity onPress={() => onRemoveMeal(m.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="trash-outline" size={18} color={colors.muted} />
+                </TouchableOpacity>
+              </View>
+            ))
+          )}
+          <View style={{ flexDirection: 'row', marginTop: 10 }}>
+            <TextInput
+              style={[styles.mealInput, { flex: 1 }]}
+              value={mealName}
+              onChangeText={setMealName}
+              placeholder="ชื่อมื้อ (ไม่บังคับ)"
+              placeholderTextColor={colors.muted}
+            />
+            <TextInput
+              style={[styles.mealInput, { width: 80, marginLeft: 8 }]}
+              value={mealKcal}
+              onChangeText={(t) => setMealKcal(t.replace(/[^0-9]/g, ''))}
+              placeholder="kcal"
+              placeholderTextColor={colors.muted}
+              keyboardType="number-pad"
+            />
+            <TouchableOpacity style={styles.mealAdd} onPress={addManualMeal} disabled={mealBusy}>
+              <Ionicons name="add" size={22} color="#fff" />
+            </TouchableOpacity>
+          </View>
+          {mealError ? <Text style={{ color: '#E53935', fontSize: 12, marginTop: 6 }}>{mealError}</Text> : null}
+        </View>
+
+        <View style={styles.card}>
           <Text style={styles.cardLabel}>เป้าหมายสุขภาพ (ให้ AI ใช้แนะนำเมนู)</Text>
           <View style={styles.presetWrap}>
             {HEALTH_GOALS.map((g) => (
@@ -172,6 +232,8 @@ const styles = StyleSheet.create({
   presetOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   presetText: { color: colors.text, fontSize: 13 },
   presetTextOn: { color: '#fff', fontWeight: 'bold' },
+  mealInput: { backgroundColor: '#FFF8F0', borderWidth: 1, borderColor: colors.border, borderRadius: 14, paddingHorizontal: 12, height: 44, fontSize: 14 },
+  mealAdd: { marginLeft: 8, width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
   today: { color: colors.muted, fontSize: 12, textAlign: 'center', marginTop: 8 },
   hint: { color: colors.muted, fontSize: 11, marginTop: 4 },
   banner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9', borderRadius: 14, padding: 10, marginBottom: 10 },

@@ -11,13 +11,21 @@ import BottomTabs from "../components/BottomTabs";
 import {
   addCommentInDB,
   clearAvatar,
+  addMealInDB,
+  clearSearchHistory,
   createCollectionInDB,
   createPostInDB,
+  deleteMealInDB,
   deletePostInDB,
+  deleteScanInDB,
+  deleteSearchKeyword,
   fetchCollections,
   fetchCreators,
   fetchFavorites,
   fetchFollows,
+  fetchMealsToday,
+  fetchScanHistory,
+  fetchSearchHistory,
   fetchMyProfile,
   fetchNotifications,
   fetchPosts,
@@ -29,6 +37,8 @@ import {
   removeFavorite,
   saveFavorite,
   saveMyProfile,
+  saveScanInDB,
+  saveSearchKeyword,
   signOutUser,
   unfollowUser,
   unlikePost,
@@ -55,8 +65,6 @@ import ScanHistoryScreen from "./ScanHistoryScreen";
 import OnboardingScreen from "./OnboardingScreen";
 import ScanScreen from "./ScanScreen";
 
-const EATEN_TODAY = 1400; // ข้อมูลจำลอง (ยังไม่มีระบบบันทึกมื้ออาหาร)
-
 // ค่าเริ่มต้นก่อนโหลดโปรไฟล์จริงจาก Supabase (ไม่ใช้ข้อมูลตัวอย่างปลอมอีกต่อไป)
 const INITIAL_PROFILE = {
   name: "",
@@ -78,6 +86,8 @@ export default function MainScreen({ onLogout }) {
   const [profile, setProfile] = useState(INITIAL_PROFILE);
   const [notifications, setNotifications] = useState([]);
   const [scanHistory, setScanHistory] = useState([]);
+  const [searchHistory, setSearchHistory] = useState([]); // คำที่เคยค้นหา (search_history)
+  const [meals, setMeals] = useState([]); // มื้อที่กินวันนี้ (meal_logs)
   const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
   const [profileLoaded, setProfileLoaded] = useState(false); // โหลดโปรไฟล์จาก DB เสร็จแล้วหรือยัง
   const [needsOnboarding, setNeedsOnboarding] = useState(false); // ยังไม่เคยตั้งค่าโปรไฟล์ครั้งแรก
@@ -112,13 +122,22 @@ export default function MainScreen({ onLogout }) {
 
     // โหลดข้อมูลเสริมจาก Supabase (แต่ละอย่างพังแยกกัน ไม่ทำให้แอปทั้งหมดพัง)
     const loadExtras = async (uid) => {
-      const [cr, fo, fa, co] = await Promise.allSettled([
+      const [cr, fo, fa, co, sh, ml, sr] = await Promise.allSettled([
         fetchCreators(),
         fetchFollows(),
         fetchFavorites(uid),
         fetchCollections(uid),
+        fetchScanHistory(uid),
+        fetchMealsToday(uid),
+        fetchSearchHistory(uid),
       ]);
       if (cancelled) return;
+      if (sh.status === "fulfilled") setScanHistory(sh.value);
+      else console.log("โหลดประวัติสแกนไม่สำเร็จ:", sh.reason?.message);
+      if (sr.status === "fulfilled") setSearchHistory(sr.value);
+      else console.log("โหลดประวัติค้นหาไม่สำเร็จ:", sr.reason?.message);
+      if (ml.status === "fulfilled") setMeals(ml.value);
+      else console.log("โหลดมื้ออาหารไม่สำเร็จ:", ml.reason?.message);
       if (cr.status === "fulfilled") setCreators(cr.value);
       else console.log("โหลดรายชื่อ creator ไม่สำเร็จ:", cr.reason?.message);
       if (fo.status === "fulfilled") setFollows(fo.value);
@@ -423,20 +442,98 @@ export default function MainScreen({ onLogout }) {
   };
 
   // ---------- ประวัติการสแกน ----------
-  const addScan = (scan) =>
-    setScanHistory((prev) => [
-      {
-        id: Date.now(),
-        at: Date.now(),
-        prompt: "",
-        ingredients: [],
-        menus: [],
-        ...scan,
-      },
-      ...prev,
-    ]);
-  const deleteScan = (id) =>
+  const addScan = async (scan) => {
+    const local = {
+      id: `tmp-${Date.now()}`,
+      at: Date.now(),
+      prompt: "",
+      ingredients: [],
+      menus: [],
+      saved: false,
+      ...scan,
+    };
+    setScanHistory((prev) => [local, ...prev]); // แสดงทันที แล้วค่อยบันทึกลง DB
+    if (!userId) return;
+    try {
+      const row = await saveScanInDB(userId, local);
+      setScanHistory((prev) => prev.map((s) => (s.id === local.id ? row : s)));
+    } catch (e) {
+      console.log("บันทึกประวัติสแกนไม่สำเร็จ:", e?.message);
+    }
+  };
+  const deleteScan = async (id) => {
+    const removed = scanHistory.find((s) => s.id === id);
     setScanHistory((prev) => prev.filter((s) => s.id !== id));
+    if (!userId || !removed?.saved) return;
+    try {
+      await deleteScanInDB(id, userId);
+    } catch (e) {
+      console.log("ลบประวัติสแกนไม่สำเร็จ:", e?.message);
+      setScanHistory((prev) =>
+        [...prev, removed].sort((a, b) => b.at - a.at),
+      );
+    }
+  };
+
+  // ---------- ประวัติการค้นหา ----------
+  const addSearch = async (keyword) => {
+    const kw = String(keyword || "").trim();
+    if (!kw || !userId) return;
+    // แสดงทันที (คำซ้ำย้ายขึ้นบนสุด) แล้วค่อยบันทึกลง DB
+    const tmpId = `tmp-${Date.now()}`;
+    setSearchHistory((prev) =>
+      [{ id: tmpId, keyword: kw }, ...prev.filter((s) => s.keyword.toLowerCase() !== kw.toLowerCase())].slice(0, 10),
+    );
+    try {
+      const row = await saveSearchKeyword(userId, kw);
+      if (row) setSearchHistory((prev) => prev.map((s) => (s.id === tmpId ? row : s)));
+    } catch (e) {
+      console.log("บันทึกประวัติค้นหาไม่สำเร็จ:", e?.message);
+    }
+  };
+  const removeSearch = async (id) => {
+    const removed = searchHistory.find((s) => s.id === id);
+    setSearchHistory((prev) => prev.filter((s) => s.id !== id));
+    if (!userId || String(id).startsWith("tmp-")) return;
+    try {
+      await deleteSearchKeyword(id, userId);
+    } catch (e) {
+      console.log("ลบประวัติค้นหาไม่สำเร็จ:", e?.message);
+      if (removed) setSearchHistory((prev) => [removed, ...prev]);
+    }
+  };
+  const clearSearches = async () => {
+    const old = searchHistory;
+    setSearchHistory([]);
+    if (!userId) return;
+    try {
+      await clearSearchHistory(userId);
+    } catch (e) {
+      console.log("ล้างประวัติค้นหาไม่สำเร็จ:", e?.message);
+      setSearchHistory(old);
+    }
+  };
+
+  // ---------- แคลอรี่ที่กินวันนี้ ----------
+  const startOfToday = new Date().setHours(0, 0, 0, 0);
+  const todayMeals = meals.filter((m) => m.at >= startOfToday);
+  const eatenToday = todayMeals.reduce((sum, m) => sum + m.kcal, 0);
+
+  const logMeal = async ({ postId = null, title, kcal }) => {
+    const uid = await requireUserId();
+    const row = await addMealInDB(uid, { postId, title, kcal });
+    setMeals((prev) => [row, ...prev]);
+  };
+  const removeMeal = async (id) => {
+    const removed = meals.find((m) => m.id === id);
+    setMeals((prev) => prev.filter((m) => m.id !== id));
+    try {
+      await deleteMealInDB(id, userId);
+    } catch (e) {
+      console.log("ลบมื้ออาหารไม่สำเร็จ:", e?.message);
+      if (removed) setMeals((prev) => [removed, ...prev]);
+    }
+  };
 
   // ---------- แจ้งเตือน ----------
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -582,6 +679,7 @@ export default function MainScreen({ onLogout }) {
         return (
           <PostDetailScreen
             post={viewPosts.find((p) => p.id === top.params.postId)}
+            onLogMeal={logMeal}
             onToggleLike={toggleLike}
             onAddComment={addComment}
             favApi={favApi}
@@ -652,7 +750,10 @@ export default function MainScreen({ onLogout }) {
         return (
           <GoalScreen
             profile={profile}
-            eaten={EATEN_TODAY}
+            eaten={eatenToday}
+            meals={todayMeals}
+            onAddMeal={logMeal}
+            onRemoveMeal={removeMeal}
             onSave={saveGoal}
             onBack={pop}
           />
@@ -710,7 +811,9 @@ export default function MainScreen({ onLogout }) {
             posts={viewPosts}
             profile={profile}
             calorieGoal={profile.calorieGoal}
-            eaten={EATEN_TODAY}
+            eaten={eatenToday}
+            favs={favs}
+            lastScan={scanHistory[0] || null}
             unreadCount={unreadCount}
             onToggleLike={toggleLike}
             onAddComment={addComment}
@@ -732,6 +835,10 @@ export default function MainScreen({ onLogout }) {
             onToggleLike={toggleLike}
             onOpenPost={openPost}
             onOpenCreator={openCreator}
+            searchHistory={searchHistory}
+            onSaveSearch={addSearch}
+            onRemoveSearch={removeSearch}
+            onClearSearches={clearSearches}
           />
         )}
         {tab === "post" && (
