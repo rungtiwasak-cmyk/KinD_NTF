@@ -16,6 +16,7 @@ import PostCard from "../components/PostCard";
 import { colors } from "../theme";
 import { nutriText } from "../utils";
 import { buildRecommendations } from "../data/recommend";
+import StateView from "../components/StateView";
 
 // ---------- ส่วนหัว ----------
 function Header({ name, avatar, avatarUrl, notifCount, onBell }) {
@@ -163,7 +164,7 @@ function TopMenuCard({ item, rank, onPress, onToggleLike }) {
         </TouchableOpacity>
       </View>
       <View style={styles.likePill}>
-        <Text style={styles.likeText}>👍 {fmtLikes(item.likes)}</Text>
+        <Text style={styles.likeText}>👍 {fmtLikes(item.likesToday ?? item.likes)}</Text>
       </View>
       <Text style={styles.menuName} numberOfLines={1}>
         {rank}. {item.title || item.caption}
@@ -184,7 +185,15 @@ function RecommendCard({ post, ready, onPress, following, onToggleFollow }) {
       onPress={onPress}
     >
       <View style={styles.recImg}>
-        <Text style={{ fontSize: 44 }}>{post.emoji}</Text>
+        {post.media && post.media.type === "image" ? (
+          <Image
+            source={{ uri: post.media.uri }}
+            style={styles.recPhoto}
+            resizeMode="cover"
+          />
+        ) : (
+          <Text style={{ fontSize: 44 }}>{post.emoji}</Text>
+        )}
         <TouchableOpacity
           style={[styles.followBtn, following && styles.followBtnOn]}
           onPress={() => onToggleFollow(post.creatorId)}
@@ -226,6 +235,9 @@ export default function HomeScreen({
   eaten = 0,
   favs = {},
   lastScan = null,
+  postsStatus = "success",
+  postsError = "",
+  onRetry,
   unreadCount = 0,
   onToggleLike,
   onAddComment,
@@ -244,10 +256,11 @@ export default function HomeScreen({
   // ฟีดแสดงเฉพาะโพสต์ของคนอื่นที่เปิดให้ขึ้นฟีด
   const feedPosts = posts.filter((p) => !p.mine && p.feed !== false);
 
-  // 10 อันดับเมนูฮิต เรียงตามยอดไลก์ (เอา // ออก และดัก posts ว่างไว้กันแอปเด้ง)
-  const topMenus = posts
-    ? [...posts].sort((a, b) => b.likes - a.likes).slice(0, 10)
-    : [];
+  // 10 อันดับเมนูฮิตรายวัน: เรียงตามจำนวนไลก์ที่ได้รับ "วันนี้" (ถ้าเท่ากันดูไลก์รวม)
+  const topMenus = (posts || [])
+    .filter((p) => (p.likesToday || 0) > 0)
+    .sort((a, b) => b.likesToday - a.likesToday || b.likes - a.likes)
+    .slice(0, 10);
   // เมนูแนะนำจากข้อมูลจริง: creator ที่ติดตาม, โพสต์ที่ไลก์/บันทึก, วัตถุดิบที่สแกนล่าสุด
   const recs = buildRecommendations({
     posts,
@@ -283,53 +296,67 @@ export default function HomeScreen({
           />
 
           <SectionHead title="🏆 10 อันดับเมนูฮิตรายวัน" />
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {topMenus.map((m, i) => (
-              <TopMenuCard
-                key={m.post_id || m.id || i}
-                item={m}
-                rank={i + 1}
-                onPress={() => onOpenPost(m.id)}
-                onToggleLike={onToggleLike}
-              />
-            ))}
-          </ScrollView>
+          <StateView
+            compact
+            status={postsStatus}
+            error={postsError}
+            onRetry={onRetry}
+            empty={topMenus.length === 0}
+            emptyIcon="trophy-outline"
+            emptyTitle="วันนี้ยังไม่มีเมนูที่ได้รับไลก์"
+            emptyHint="กดหัวใจเมนูที่ชอบ แล้วจะขึ้นอันดับที่นี่ (นับใหม่ทุกวัน)"
+          >
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {topMenus.map((m, i) => (
+                <TopMenuCard
+                  key={m.post_id || m.id || i}
+                  item={m}
+                  rank={i + 1}
+                  onPress={() => onOpenPost(m.id)}
+                  onToggleLike={onToggleLike}
+                />
+              ))}
+            </ScrollView>
+          </StateView>
 
           <SectionHead title="🍽️ เมนูแนะนำสำหรับคุณ" action="ดูทั้งหมด ›" />
           <Text style={styles.sectionSub}>
             อิงจาก Creator ที่ follow, โพสต์ที่ไลก์/บันทึก และวัตถุดิบที่สแกนล่าสุด
           </Text>
-          {recs.length === 0 && (
-            <Text style={{ color: colors.muted, marginVertical: 12 }}>
-              ยังไม่มีเมนูแนะนำ ลองติดตาม Creator หรือกดไลก์โพสต์ที่ชอบดูนะ
-            </Text>
-          )}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {recs.map((r) => (
-              <RecommendCard
-                key={r.postId}
-                post={r.post}
-                ready={r.ready}
-                onPress={() => onOpenPost(r.postId)}
-                following={!!following[r.post.creatorId]}
-                onToggleFollow={onToggleFollow}
-              />
-            ))}
-          </ScrollView>
+          <StateView
+            compact
+            status={postsStatus}
+            error={postsError}
+            onRetry={onRetry}
+            empty={recs.length === 0}
+            emptyTitle="ยังไม่มีเมนูแนะนำ"
+            emptyHint="ลองติดตาม Creator หรือกดไลก์โพสต์ที่ชอบดูนะ"
+          >
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {recs.map((r) => (
+                <RecommendCard
+                  key={r.postId}
+                  post={r.post}
+                  ready={r.ready}
+                  onPress={() => onOpenPost(r.postId)}
+                  following={!!following[r.post.creatorId]}
+                  onToggleFollow={onToggleFollow}
+                />
+              ))}
+            </ScrollView>
+          </StateView>
 
           <SectionHead title="👥 โพสต์จาก Creator" />
-          {feedPosts.length === 0 ? (
-            <Text
-              style={{
-                color: colors.muted,
-                textAlign: "center",
-                marginVertical: 16,
-              }}
-            >
-              ยังไม่มีโพสต์
-            </Text>
-          ) : (
-            feedPosts.map((p) => (
+          <StateView
+            status={postsStatus}
+            error={postsError}
+            onRetry={onRetry}
+            empty={feedPosts.length === 0}
+            emptyIcon="albums-outline"
+            emptyTitle="ยังไม่มีโพสต์"
+            emptyHint="เมื่อมี Creator โพสต์เมนูใหม่ จะขึ้นที่นี่"
+          >
+            {feedPosts.map((p) => (
               <PostCard
                 key={p.id}
                 post={p}
@@ -338,8 +365,8 @@ export default function HomeScreen({
                 favApi={favApi}
                 onOpenCreator={onOpenCreator}
               />
-            ))
-          )}
+            ))}
+          </StateView>
         </View>
       </ScrollView>
     </View>
@@ -545,6 +572,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 8,
   },
+  recPhoto: { width: "100%", height: "100%", borderRadius: 12 },
   followBtn: {
     position: "absolute",
     top: 6,

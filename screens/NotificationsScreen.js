@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import { ago } from '../utils';
+import StateView from '../components/StateView';
 
 const ICONS = {
   menu: 'restaurant-outline',
@@ -14,7 +15,7 @@ const ICONS = {
   system: 'flame-outline',
 };
 
-export default function NotificationsScreen({ notifications, onOpen, onReadAll, onBack }) {
+export default function NotificationsScreen({ notifications, status = 'success', error = '', onRetry, onOpen, onReadAll, onBack }) {
   const unread = notifications.filter((n) => !n.read).length;
 
   return (
@@ -35,7 +36,15 @@ export default function NotificationsScreen({ notifications, onOpen, onReadAll, 
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-        {notifications.length === 0 && <Text style={styles.empty}>ยังไม่มีการแจ้งเตือน</Text>}
+        <StateView
+          status={status}
+          error={error}
+          onRetry={onRetry}
+          empty={notifications.length === 0}
+          emptyIcon="notifications-off-outline"
+          emptyTitle="ยังไม่มีการแจ้งเตือน"
+          emptyHint="เมื่อมีคนไลก์ คอมเมนต์ หรือติดตามคุณ จะขึ้นที่นี่"
+        >
         {notifications.map((n) => (
           <TouchableOpacity
             key={n.id}
@@ -53,6 +62,7 @@ export default function NotificationsScreen({ notifications, onOpen, onReadAll, 
             {!n.read && <View style={styles.dot} />}
           </TouchableOpacity>
         ))}
+        </StateView>
       </ScrollView>
     </SafeAreaView>
     </ImageBackground>

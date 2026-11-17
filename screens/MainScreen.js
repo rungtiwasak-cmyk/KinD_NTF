@@ -64,6 +64,7 @@ import PostDetailScreen from "./PostDetailScreen";
 import ScanHistoryScreen from "./ScanHistoryScreen";
 import OnboardingScreen from "./OnboardingScreen";
 import ScanScreen from "./ScanScreen";
+import { combineStatus } from "../components/StateView";
 
 // ค่าเริ่มต้นก่อนโหลดโปรไฟล์จริงจาก Supabase (ไม่ใช้ข้อมูลตัวอย่างปลอมอีกต่อไป)
 const INITIAL_PROFILE = {
@@ -86,6 +87,23 @@ export default function MainScreen({ onLogout }) {
   const [profile, setProfile] = useState(INITIAL_PROFILE);
   const [notifications, setNotifications] = useState([]);
   const [scanHistory, setScanHistory] = useState([]);
+  // สถานะการโหลดของข้อมูลแต่ละส่วน: 'loading' | 'error' | 'success' (ว่างดูจากจำนวนรายการในแต่ละหน้า)
+  const [status, setStatus] = useState({
+    posts: "loading",
+    creators: "loading",
+    favs: "loading",
+    notifications: "loading",
+    scans: "loading",
+    searches: "loading",
+    meals: "loading",
+  });
+  const [loadError, setLoadError] = useState({}); // ข้อความ error ของแต่ละส่วน
+  const [reloadKey, setReloadKey] = useState(0); // เพิ่มค่าเพื่อโหลดทั้งหมดใหม่ (ปุ่มลองใหม่)
+  const markStatus = (key, value, message = "") => {
+    setStatus((prev) => (prev[key] === value ? prev : { ...prev, [key]: value }));
+    setLoadError((prev) => ({ ...prev, [key]: message }));
+  };
+  const retryLoad = () => setReloadKey((k) => k + 1);
   const [searchHistory, setSearchHistory] = useState([]); // คำที่เคยค้นหา (search_history)
   const [meals, setMeals] = useState([]); // มื้อที่กินวันนี้ (meal_logs)
   const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
@@ -132,18 +150,22 @@ export default function MainScreen({ onLogout }) {
         fetchSearchHistory(uid),
       ]);
       if (cancelled) return;
-      if (sh.status === "fulfilled") setScanHistory(sh.value);
-      else console.log("โหลดประวัติสแกนไม่สำเร็จ:", sh.reason?.message);
-      if (sr.status === "fulfilled") setSearchHistory(sr.value);
-      else console.log("โหลดประวัติค้นหาไม่สำเร็จ:", sr.reason?.message);
-      if (ml.status === "fulfilled") setMeals(ml.value);
-      else console.log("โหลดมื้ออาหารไม่สำเร็จ:", ml.reason?.message);
-      if (cr.status === "fulfilled") setCreators(cr.value);
-      else console.log("โหลดรายชื่อ creator ไม่สำเร็จ:", cr.reason?.message);
+      const track = (key, r, onOk, label) => {
+        if (r.status === "fulfilled") {
+          onOk(r.value);
+          markStatus(key, "success");
+        } else {
+          console.log(`โหลด${label}ไม่สำเร็จ:`, r.reason?.message);
+          markStatus(key, "error", r.reason?.message || "");
+        }
+      };
+      track("searches", sr, setSearchHistory, "ประวัติค้นหา");
+      track("meals", ml, setMeals, "มื้ออาหาร");
+      track("scans", sh, setScanHistory, "ประวัติสแกน");
+      track("creators", cr, setCreators, "รายชื่อ creator");
       if (fo.status === "fulfilled") setFollows(fo.value);
       else console.log("โหลดการติดตามไม่สำเร็จ:", fo.reason?.message);
-      if (fa.status === "fulfilled") setFavs(fa.value);
-      else console.log("โหลด Favorite ไม่สำเร็จ:", fa.reason?.message);
+      track("favs", fa, setFavs, "Favorite");
       if (co.status === "fulfilled") {
         if (co.value.length > 0) setCollections(co.value);
         else {
@@ -162,6 +184,10 @@ export default function MainScreen({ onLogout }) {
     };
 
     const loadData = async () => {
+      // ลองใหม่: ตั้งทุกส่วนกลับเป็น "กำลังโหลด" ก่อน
+      setStatus((prev) =>
+        Object.fromEntries(Object.keys(prev).map((k) => [k, "loading"])),
+      );
       try {
         // 1. ดึงข้อมูลผู้ใช้ที่ล็อกอินอยู่ปัจจุบันจาก Auth
         const {
@@ -189,14 +215,23 @@ export default function MainScreen({ onLogout }) {
           }
         }
 
+        // ไม่มีผู้ใช้ล็อกอิน = ไม่มีข้อมูลส่วนตัวให้โหลด ถือว่าเสร็จ (ว่าง)
+        if (!user && !cancelled) {
+          ["creators", "favs", "notifications", "scans", "searches", "meals"].forEach(
+            (k) => markStatus(k, "success"),
+          );
+        }
+
         // 3. ดึงโพสต์ทั้งหมด
         const list = await fetchPosts(user?.id);
 
         if (!cancelled) {
           setPosts(list);
+          markStatus("posts", "success");
         }
       } catch (error) {
         console.log("โหลดข้อมูลไม่สำเร็จ:", error.message);
+        if (!cancelled) markStatus("posts", "error", error.message);
       } finally {
         if (!cancelled) setProfileLoaded(true);
       }
@@ -207,7 +242,7 @@ export default function MainScreen({ onLogout }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
   // ---------- โพสต์ ----------
   const addPost = async (postData) => {
     try {
@@ -302,7 +337,12 @@ export default function MainScreen({ onLogout }) {
     setPosts((prev) =>
       prev.map((p) =>
         p.id === id && p.liked !== liked
-          ? { ...p, liked, likes: p.likes + (liked ? 1 : -1) }
+          ? {
+              ...p,
+              liked,
+              likes: p.likes + (liked ? 1 : -1),
+              likesToday: Math.max(0, (p.likesToday || 0) + (liked ? 1 : -1)),
+            }
           : p,
       ),
     );
@@ -536,6 +576,16 @@ export default function MainScreen({ onLogout }) {
   };
 
   // ---------- แจ้งเตือน ----------
+  const retryNotifications = () => {
+    if (!userId) return;
+    markStatus("notifications", "loading");
+    fetchNotifications(userId)
+      .then((data) => {
+        setNotifications(data);
+        markStatus("notifications", "success");
+      })
+      .catch((e) => markStatus("notifications", "error", e?.message || ""));
+  };
   const unreadCount = notifications.filter((n) => !n.read).length;
   const readAll = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
@@ -559,19 +609,23 @@ export default function MainScreen({ onLogout }) {
   useEffect(() => {
     if (!userId) return undefined;
     let isMounted = true;
-    fetchNotifications(userId)
-      .then((data) => {
-        if (isMounted) setNotifications(data);
-      })
-      .catch((e) => console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message));
-
-    const timer = setInterval(() => {
+    const load = () =>
       fetchNotifications(userId)
         .then((data) => {
-          if (isMounted) setNotifications(data);
+          if (!isMounted) return;
+          setNotifications(data);
+          markStatus("notifications", "success");
         })
-        .catch((e) => console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message));
-    }, 30000);
+        .catch((e) => {
+          console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message);
+          // ถ้าเคยโหลดสำเร็จแล้ว (รอบ 30 วินาที) ไม่ต้องเด้งหน้า error ทับข้อมูลเดิม
+          if (isMounted)
+            setStatus((prev) =>
+              prev.notifications === "success" ? prev : { ...prev, notifications: "error" },
+            );
+        });
+    load();
+    const timer = setInterval(load, 30000);
 
     return () => {
       isMounted = false;
@@ -583,8 +637,14 @@ export default function MainScreen({ onLogout }) {
   useEffect(() => {
     if (activeTopName === "notifications" && userId) {
       fetchNotifications(userId)
-        .then(setNotifications)
-        .catch((e) => console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message));
+        .then((data) => {
+          setNotifications(data);
+          markStatus("notifications", "success");
+        })
+        .catch((e) => {
+          console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message);
+          markStatus("notifications", "error", e?.message || "");
+        });
     }
   }, [activeTopName, userId]);
 
@@ -657,6 +717,9 @@ export default function MainScreen({ onLogout }) {
         return (
           <NotificationsScreen
             notifications={notifications}
+            status={status.notifications}
+            error={loadError.notifications}
+            onRetry={retryNotifications}
             onOpen={openNotification}
             onReadAll={readAll}
             onBack={pop}
@@ -680,6 +743,9 @@ export default function MainScreen({ onLogout }) {
           <PostDetailScreen
             post={viewPosts.find((p) => p.id === top.params.postId)}
             onLogMeal={logMeal}
+            status={status.posts}
+            error={loadError.posts}
+            onRetry={retryLoad}
             onToggleLike={toggleLike}
             onAddComment={addComment}
             favApi={favApi}
@@ -703,6 +769,9 @@ export default function MainScreen({ onLogout }) {
           <CreatorScreen
             creator={creator}
             posts={viewPosts.filter((p) => p.creatorId === cid && !p.mine)}
+            status={status.posts}
+            error={loadError.posts}
+            onRetry={retryLoad}
             isFollowing={!!following[cid]}
             onToggleFollow={toggleFollow}
             favApi={favApi}
@@ -719,6 +788,9 @@ export default function MainScreen({ onLogout }) {
             key={top.name}
             initialTab={top.name === "liked" ? "liked" : "fav"}
             posts={viewPosts}
+            status={combineStatus(status.posts, status.favs)}
+            error={loadError.posts || loadError.favs}
+            onRetry={retryLoad}
             favApi={favApi}
             onToggleLike={toggleLike}
             onAddComment={addComment}
@@ -730,6 +802,9 @@ export default function MainScreen({ onLogout }) {
         return (
           <ScanHistoryScreen
             history={scanHistory}
+            status={status.scans}
+            error={loadError.scans}
+            onRetry={retryLoad}
             onDelete={deleteScan}
             onBack={pop}
           />
@@ -738,6 +813,9 @@ export default function MainScreen({ onLogout }) {
         return (
           <MyPostsScreen
             posts={myPosts}
+            status={status.posts}
+            error={loadError.posts}
+            onRetry={retryLoad}
             favApi={favApi}
             onToggleLike={toggleLike}
             onAddComment={addComment}
@@ -752,6 +830,8 @@ export default function MainScreen({ onLogout }) {
             profile={profile}
             eaten={eatenToday}
             meals={todayMeals}
+            mealsStatus={status.meals}
+            onRetryMeals={retryLoad}
             onAddMeal={logMeal}
             onRemoveMeal={removeMeal}
             onSave={saveGoal}
@@ -814,6 +894,9 @@ export default function MainScreen({ onLogout }) {
             eaten={eatenToday}
             favs={favs}
             lastScan={scanHistory[0] || null}
+            postsStatus={status.posts}
+            postsError={loadError.posts}
+            onRetry={retryLoad}
             unreadCount={unreadCount}
             onToggleLike={toggleLike}
             onAddComment={addComment}
@@ -835,6 +918,9 @@ export default function MainScreen({ onLogout }) {
             onToggleLike={toggleLike}
             onOpenPost={openPost}
             onOpenCreator={openCreator}
+            postsStatus={status.posts}
+            creatorsStatus={status.creators}
+            onRetry={retryLoad}
             searchHistory={searchHistory}
             onSaveSearch={addSearch}
             onRemoveSearch={removeSearch}

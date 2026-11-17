@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ImageBackground }
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
+import StateView from '../components/StateView';
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmt = (ms) => {
@@ -10,7 +11,7 @@ const fmt = (ms) => {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-export default function ScanHistoryScreen({ history, onDelete, onBack }) {
+export default function ScanHistoryScreen({ history, status = 'success', error = '', onRetry, onDelete, onBack }) {
   return (
     <ImageBackground
       source={require('../assets/bg_history.jpg')} 
@@ -26,7 +27,15 @@ export default function ScanHistoryScreen({ history, onDelete, onBack }) {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-        {history.length === 0 && <Text style={styles.empty}>ยังไม่มีประวัติการสแกน</Text>}
+        <StateView
+          status={status}
+          error={error}
+          onRetry={onRetry}
+          empty={history.length === 0}
+          emptyIcon="scan-outline"
+          emptyTitle="ยังไม่มีประวัติการสแกน"
+          emptyHint="สแกนวัตถุดิบในตู้เย็น แล้วผลจะถูกเก็บไว้ที่นี่"
+        >
         {history.map((h) => (
           <View key={h.id} style={styles.card}>
             <View style={styles.cardTop}>
@@ -62,6 +71,7 @@ export default function ScanHistoryScreen({ history, onDelete, onBack }) {
             )}
           </View>
         ))}
+        </StateView>
       </ScrollView>
     </SafeAreaView>
     </ImageBackground>

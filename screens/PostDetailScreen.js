@@ -4,9 +4,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import PostCard from '../components/PostCard';
+import StateView from '../components/StateView';
 
 // หน้ารายละเอียดโพสต์/เมนู: แสดงเป็นโพสต์ พร้อมกางส่วนผสมและวิธีทำให้เลย
-export default function PostDetailScreen({ post, onLogMeal, onToggleLike, onAddComment, favApi, onOpenCreator, onBack }) {
+export default function PostDetailScreen({ post, status = 'success', error = '', onRetry, onLogMeal, onToggleLike, onAddComment, favApi, onOpenCreator, onBack }) {
   const [logging, setLogging] = useState(false);
   const [logMsg, setLogMsg] = useState('');
   const kcal = post ? parseInt(String(post.kcal || '').replace(/[^0-9]/g, ''), 10) || 0 : 0;
@@ -39,7 +40,10 @@ export default function PostDetailScreen({ post, onLogMeal, onToggleLike, onAddC
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-        {post ? (
+        {status !== 'success' ? (
+          <StateView status={status} error={error} onRetry={onRetry} />
+        ) : null}
+        {status === 'success' && post ? (
           <PostCard
             post={post}
             onToggleLike={onToggleLike}
@@ -49,7 +53,7 @@ export default function PostDetailScreen({ post, onLogMeal, onToggleLike, onAddC
             defaultOpen
           />
         ) : null}
-        {post && onLogMeal ? (
+        {status === 'success' && post && onLogMeal ? (
           <View style={{ marginTop: 4 }}>
             <TouchableOpacity
               style={[styles.logBtn, (kcal <= 0 || logging) && { opacity: 0.5 }]}
@@ -69,8 +73,8 @@ export default function PostDetailScreen({ post, onLogMeal, onToggleLike, onAddC
             {logMsg ? <Text style={styles.logMsg}>{logMsg}</Text> : null}
           </View>
         ) : null}
-        {!post ? (
-          <Text style={styles.empty}>ไม่พบโพสต์นี้แล้ว (อาจถูกลบไปแล้ว)</Text>
+        {status === 'success' && !post ? (
+          <StateView empty emptyIcon="trash-outline" emptyTitle="ไม่พบโพสต์นี้แล้ว" emptyHint="โพสต์อาจถูกลบไปแล้ว" emptyAction={onBack} emptyActionLabel="ย้อนกลับ" />
         ) : null}
       </ScrollView>
     </SafeAreaView>

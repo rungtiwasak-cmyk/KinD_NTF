@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import PostCard from '../components/PostCard';
+import StateView from '../components/StateView';
 
 function CollectionChip({ id, label, group, onPress }) {
   return (
@@ -32,6 +33,9 @@ export default function FavoritesScreen({
   onAddComment,
   onBack,
   onOpenCreator,
+  status = 'success',
+  error = '',
+  onRetry,
   initialTab = 'fav',
 }) {
   const [tab, setTab] = useState(initialTab);
@@ -95,6 +99,7 @@ export default function FavoritesScreen({
       <ScrollView
         contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
         keyboardShouldPersistTaps="handled">
+        <StateView status={status} error={error} onRetry={onRetry}>
         {tab === 'fav' && (
           <>
             <ScrollView
@@ -148,14 +153,14 @@ export default function FavoritesScreen({
               </View>
             )}
 
-            {shown.length === 0 ? (
-              <Text style={styles.empty}>
-                {favPosts.length === 0
-                  ? 'ยังไม่มีโพสต์ใน Favorite กดรูป bookmark ที่โพสต์เพื่อเก็บไว้ได้เลย'
-                  : 'ยังไม่มีโพสต์ในกลุ่มนี้'}
-              </Text>
-            ) : (
-              shown.map((p) => (
+            <StateView
+              compact
+              empty={shown.length === 0}
+              emptyIcon="bookmark-outline"
+              emptyTitle={favPosts.length === 0 ? 'ยังไม่มีโพสต์ใน Favorite' : 'ยังไม่มีโพสต์ในกลุ่มนี้'}
+              emptyHint={favPosts.length === 0 ? 'กดรูป bookmark ที่โพสต์เพื่อเก็บไว้ได้เลย' : ''}
+            >
+              {shown.map((p) => (
                 <PostCard
                   key={p.id}
                   post={p}
@@ -164,16 +169,19 @@ export default function FavoritesScreen({
                   favApi={favApi}
                   onOpenCreator={onOpenCreator}
                 />
-              ))
-            )}
+              ))}
+            </StateView>
           </>
         )}
 
-        {tab === 'liked' &&
-          (likedPosts.length === 0 ? (
-            <Text style={styles.empty}>ยังไม่ได้กดหัวใจโพสต์ไหนเลย</Text>
-          ) : (
-            likedPosts.map((p) => (
+        {tab === 'liked' && (
+          <StateView
+            compact
+            empty={likedPosts.length === 0}
+            emptyIcon="heart-outline"
+            emptyTitle="ยังไม่ได้กดหัวใจโพสต์ไหนเลย"
+          >
+            {likedPosts.map((p) => (
               <PostCard
                 key={p.id}
                 post={p}
@@ -182,8 +190,10 @@ export default function FavoritesScreen({
                 favApi={favApi}
                 onOpenCreator={onOpenCreator}
               />
-            ))
-          ))}
+            ))}
+          </StateView>
+        )}
+        </StateView>
       </ScrollView>
     </SafeAreaView>
   </ImageBackground>

@@ -4,12 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import { HEALTH_GOALS } from '../data/profileOptions';
+import StateView from '../components/StateView';
 
 const PRESETS = [1500, 1800, 2000, 2200, 2500];
 const MIN = 800;
 const MAX = 5000;
 
-export default function GoalScreen({ profile, eaten = 0, meals = [], onAddMeal, onRemoveMeal, onSave, onBack }) {
+export default function GoalScreen({ profile, eaten = 0, meals = [], mealsStatus = 'success', onRetryMeals, onAddMeal, onRemoveMeal, onSave, onBack }) {
   const [mealName, setMealName] = useState('');
   const [mealKcal, setMealKcal] = useState('');
   const [mealBusy, setMealBusy] = useState(false);
@@ -132,10 +133,16 @@ export default function GoalScreen({ profile, eaten = 0, meals = [], onAddMeal, 
 
         <View style={styles.card}>
           <Text style={styles.cardLabel}>มื้อที่กินวันนี้</Text>
-          {meals.length === 0 ? (
-            <Text style={styles.hint}>ยังไม่มีการบันทึก กด "บันทึกว่ากินมื้อนี้" ในหน้าโพสต์ หรือเพิ่มเองด้านล่าง</Text>
-          ) : (
-            meals.map((m) => (
+          <StateView
+            compact
+            status={mealsStatus}
+            onRetry={onRetryMeals}
+            empty={meals.length === 0}
+            emptyIcon="restaurant-outline"
+            emptyTitle="วันนี้ยังไม่ได้บันทึกมื้อไหน"
+            emptyHint='กด "บันทึกว่ากินมื้อนี้" ในหน้าโพสต์ หรือเพิ่มเองด้านล่าง'
+          >
+            {meals.map((m) => (
               <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
                 <Text style={{ flex: 1, color: colors.text, fontSize: 14 }} numberOfLines={1}>{m.title}</Text>
                 <Text style={{ color: colors.text, fontWeight: 'bold', marginRight: 10 }}>{m.kcal} kcal</Text>
@@ -143,8 +150,8 @@ export default function GoalScreen({ profile, eaten = 0, meals = [], onAddMeal, 
                   <Ionicons name="trash-outline" size={18} color={colors.muted} />
                 </TouchableOpacity>
               </View>
-            ))
-          )}
+            ))}
+          </StateView>
           <View style={{ flexDirection: 'row', marginTop: 10 }}>
             <TextInput
               style={[styles.mealInput, { flex: 1 }]}

@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import Avatar from '../components/Avatar';
 import { nutriText } from '../utils';
+import StateView from '../components/StateView';
 
 // ---------- ข้อมูลจำลอง ----------
 const CATEGORIES = [
@@ -110,6 +111,9 @@ export default function SearchScreen({
   onToggleLike,
   onOpenPost,
   onOpenCreator,
+  postsStatus = 'success',
+  creatorsStatus = 'success',
+  onRetry,
   searchHistory = [],
   onSaveSearch,
   onRemoveSearch,
@@ -217,7 +221,14 @@ export default function SearchScreen({
         <View style={styles.sectionHead}>
           <Text style={styles.sectionTitle}>👩‍🍳 Creator แนะนำ</Text>
         </View>
-        {creators.length > 0 ? (
+        <StateView
+          compact
+          status={creatorsStatus}
+          onRetry={onRetry}
+          empty={creators.length === 0}
+          emptyIcon="people-outline"
+          emptyTitle={q ? 'ไม่พบ creator ที่ค้นหา' : 'ยังไม่มี creator'}
+        >
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {creators.map((c) => (
               <CreatorCard
@@ -232,9 +243,7 @@ export default function SearchScreen({
               />
             ))}
           </ScrollView>
-        ) : (
-          <Text style={styles.empty}>ไม่พบ creator ที่ค้นหา</Text>
-        )}
+        </StateView>
 
         {/* ตัวกรอง: อยากกินอะไรดี */}
         <View style={styles.sectionHead}>
@@ -276,8 +285,17 @@ export default function SearchScreen({
           ) : null}
         </View>
 
-        {menus.length > 0 ? (
-          menus.map((m, i) => (
+        <StateView
+          status={postsStatus}
+          onRetry={onRetry}
+          empty={menus.length === 0}
+          emptyIcon="search-outline"
+          emptyTitle="ไม่พบเมนูที่ตรงกับตัวกรอง"
+          emptyHint="ลองเปลี่ยนคำค้นหา หรือล้างตัวกรองดูนะ"
+          emptyAction={hasFilter ? clearAll : undefined}
+          emptyActionLabel="ล้างตัวกรอง"
+        >
+          {menus.map((m, i) => (
             <MenuRow
               key={m.id}
               item={m}
@@ -288,12 +306,8 @@ export default function SearchScreen({
               }}
               onToggleLike={onToggleLike}
             />
-          ))
-        ) : (
-          <Text style={styles.empty}>
-            ไม่พบเมนูที่ตรงกับตัวกรอง ลองเปลี่ยนหรือล้างตัวกรองดูครับ
-          </Text>
-        )}
+          ))}
+        </StateView>
         </ScrollView>
       </SafeAreaView>
     </ImageBackground>

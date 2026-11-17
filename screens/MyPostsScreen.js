@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import PostCard from '../components/PostCard';
+import StateView from '../components/StateView';
 
 // โพสต์ 1 ใบ + ปุ่มลบ (กดยืนยัน 2 ครั้ง กันกดพลาด)
 function MyPostItem({ post, onDelete, onToggleLike, onAddComment, favApi }) {
@@ -44,7 +45,7 @@ function MyPostItem({ post, onDelete, onToggleLike, onAddComment, favApi }) {
   );
 }
 
-export default function MyPostsScreen({ posts, favApi, onToggleLike, onAddComment, onDelete, onCreate, onBack }) {
+export default function MyPostsScreen({ posts, status = 'success', error = '', onRetry, favApi, onToggleLike, onAddComment, onDelete, onCreate, onBack }) {
   const likes = posts.reduce((sum, p) => sum + p.likes, 0);
   const comments = posts.reduce((sum, p) => sum + p.comments.length, 0);
 
@@ -78,16 +79,18 @@ export default function MyPostsScreen({ posts, favApi, onToggleLike, onAddCommen
           </View>
         </View>
 
-        {posts.length === 0 ? (
-          <View style={{ alignItems: 'center', marginTop: 30 }}>
-            <Text style={[styles.empty, { color: '#FFFFFF' }]}>ยังไม่มีโพสต์ของคุณ</Text>
-            <TouchableOpacity style={styles.createBtn} onPress={onCreate}>
-              <Ionicons name="add" size={18} color="#fff" />
-              <Text style={styles.createText}>สร้างโพสต์แรก</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          posts.map((p) => (
+        <StateView
+          status={status}
+          error={error}
+          onRetry={onRetry}
+          empty={posts.length === 0}
+          emptyIcon="albums-outline"
+          emptyTitle="ยังไม่มีโพสต์ของคุณ"
+          emptyHint="แชร์เมนูแรกของคุณให้คนอื่นได้ลองทำ"
+          emptyAction={onCreate}
+          emptyActionLabel="สร้างโพสต์แรก"
+        >
+          {posts.map((p) => (
             <MyPostItem
               key={p.id}
               post={p}
@@ -96,8 +99,8 @@ export default function MyPostsScreen({ posts, favApi, onToggleLike, onAddCommen
               onAddComment={onAddComment}
               favApi={favApi}
             />
-          ))
-        )}
+          ))}
+        </StateView>
       </ScrollView>
     </SafeAreaView>
     </ImageBackground>

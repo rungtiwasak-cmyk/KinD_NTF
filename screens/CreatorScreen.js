@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import PostCard from '../components/PostCard';
 import Avatar from '../components/Avatar';
+import StateView from '../components/StateView';
 
 // หน้า Creator: โปรไฟล์ของ Creator + โพสต์ทั้งหมดของเขา
 export default function CreatorScreen({
@@ -15,6 +16,9 @@ export default function CreatorScreen({
   favApi,
   onToggleLike,
   onAddComment,
+  status = 'success',
+  error = '',
+  onRetry,
   onBack,
 }) {
   const sorted = [...posts].sort((a, b) => b.likes - a.likes);
@@ -36,8 +40,10 @@ export default function CreatorScreen({
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-        {!creator ? (
-          <Text style={styles.empty}>ไม่พบ Creator คนนี้</Text>
+        {status !== 'success' ? (
+          <StateView status={status} error={error} onRetry={onRetry} />
+        ) : !creator ? (
+          <StateView empty emptyIcon="person-outline" emptyTitle="ไม่พบ Creator คนนี้" emptyHint="บัญชีนี้อาจถูกลบไปแล้ว" />
         ) : (
           <>
             <View style={styles.profile}>
@@ -78,10 +84,13 @@ export default function CreatorScreen({
             </View>
 
             <Text style={styles.section}>โพสต์ของ {creator.name}</Text>
-            {sorted.length === 0 ? (
-              <Text style={styles.empty}>ยังไม่มีโพสต์</Text>
-            ) : (
-              sorted.map((p) => (
+            <StateView
+              compact
+              empty={sorted.length === 0}
+              emptyIcon="albums-outline"
+              emptyTitle="ยังไม่มีโพสต์"
+            >
+              {sorted.map((p) => (
                 <PostCard
                   key={p.id}
                   post={p}
@@ -89,8 +98,8 @@ export default function CreatorScreen({
                   onAddComment={onAddComment}
                   favApi={favApi}
                 />
-              ))
-            )}
+              ))}
+            </StateView>
           </>
         )}
       </ScrollView>

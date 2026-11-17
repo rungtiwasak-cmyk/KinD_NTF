@@ -1,0 +1,1150 @@
+From b6679be64c0eb76275114260e6cb6a0eda08ef12 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 17 Nov 2026 18:40:28 +0700
+Subject: [PATCH] Daily top menus by today's likes, recommend images, 4-state
+ StateView on all screens
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01T6RCBwWvYEVom7cZFqwsRi
+---
+ components/StateView.js        |  90 ++++++++++++++++++++++
+ lib/api.js                     |  28 +++++--
+ screens/CreatorScreen.js       |  25 ++++--
+ screens/FavoritesScreen.js     |  44 ++++++-----
+ screens/GoalScreen.js          |  21 ++++--
+ screens/HomeScreen.js          | 124 ++++++++++++++++++------------
+ screens/MainScreen.js          | 134 +++++++++++++++++++++++++++------
+ screens/MyPostsScreen.js       |  29 +++----
+ screens/NotificationsScreen.js |  14 +++-
+ screens/PostDetailScreen.js    |  14 ++--
+ screens/ScanHistoryScreen.js   |  14 +++-
+ screens/SearchScreen.js        |  38 +++++++---
+ 12 files changed, 430 insertions(+), 145 deletions(-)
+ create mode 100644 components/StateView.js
+
+diff --git a/components/StateView.js b/components/StateView.js
+new file mode 100644
+index 0000000..de93ad2
+--- /dev/null
++++ b/components/StateView.js
+@@ -0,0 +1,90 @@
++import React from 'react';
++import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
++import { Ionicons } from '@expo/vector-icons';
++import { colors } from '../theme';
++
++// รวมสถานะหลายแหล่งข้อมูลเป็นสถานะเดียว: error > loading > success
++export const combineStatus = (...list) =>
++  list.includes('error') ? 'error' : list.includes('loading') ? 'loading' : 'success';
++
++// ตัวครอบมาตรฐานให้ทุกหน้าจอมี 4 สถานะ
++//   1. loading = กำลังโหลด   2. empty = ว่าง   3. error = ผิดพลาด (มีปุ่มลองใหม่)   4. success = แสดงข้อมูลจริง
++// ใช้: <StateView status={status} empty={list.length === 0} onRetry={...}>...ข้อมูลจริง...</StateView>
++export default function StateView({
++  status = 'success',
++  empty = false,
++  error = '',
++  onRetry,
++  loadingText = 'กำลังโหลด...',
++  emptyIcon = 'restaurant-outline',
++  emptyTitle = 'ยังไม่มีข้อมูล',
++  emptyHint = '',
++  emptyAction,
++  emptyActionLabel = '',
++  compact = false,
++  children,
++}) {
++  if (status === 'loading') {
++    return (
++      <View style={[styles.box, compact && styles.compact]}>
++        <ActivityIndicator size="large" color={colors.primary} />
++        <Text style={styles.hint}>{loadingText}</Text>
++      </View>
++    );
++  }
++  if (status === 'error') {
++    return (
++      <View style={[styles.box, compact && styles.compact]}>
++        <Ionicons name="cloud-offline-outline" size={36} color="#E53935" />
++        <Text style={styles.title}>เกิดข้อผิดพลาด</Text>
++        <Text style={styles.hint}>{error || 'โหลดข้อมูลไม่สำเร็จ ตรวจสอบอินเทอร์เน็ตแล้วลองอีกครั้ง'}</Text>
++        {onRetry ? (
++          <TouchableOpacity style={styles.btn} onPress={onRetry} activeOpacity={0.85}>
++            <Ionicons name="refresh" size={16} color="#fff" />
++            <Text style={styles.btnText}>ลองใหม่</Text>
++          </TouchableOpacity>
++        ) : null}
++      </View>
++    );
++  }
++  if (empty) {
++    return (
++      <View style={[styles.box, compact && styles.compact]}>
++        <Ionicons name={emptyIcon} size={36} color={colors.muted} />
++        <Text style={styles.title}>{emptyTitle}</Text>
++        {emptyHint ? <Text style={styles.hint}>{emptyHint}</Text> : null}
++        {emptyAction ? (
++          <TouchableOpacity style={styles.btn} onPress={emptyAction} activeOpacity={0.85}>
++            <Text style={styles.btnText}>{emptyActionLabel}</Text>
++          </TouchableOpacity>
++        ) : null}
++      </View>
++    );
++  }
++  return <>{children}</>;
++}
++
++const styles = StyleSheet.create({
++  box: {
++    alignItems: 'center',
++    justifyContent: 'center',
++    backgroundColor: 'rgba(255,255,255,0.88)',
++    borderRadius: 20,
++    paddingVertical: 28,
++    paddingHorizontal: 20,
++    marginVertical: 10,
++  },
++  compact: { paddingVertical: 18 },
++  title: { marginTop: 8, fontSize: 15, fontWeight: 'bold', color: colors.text, textAlign: 'center' },
++  hint: { marginTop: 6, fontSize: 12, color: colors.muted, textAlign: 'center', lineHeight: 18 },
++  btn: {
++    marginTop: 14,
++    flexDirection: 'row',
++    alignItems: 'center',
++    backgroundColor: colors.primary,
++    borderRadius: 24,
++    paddingHorizontal: 20,
++    paddingVertical: 10,
++  },
++  btnText: { color: '#fff', fontWeight: 'bold', fontSize: 13, marginLeft: 6 },
++});
+diff --git a/lib/api.js b/lib/api.js
+index 623f94d..945416a 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -49,6 +49,11 @@ async function mediaToArrayBuffer(media) {
+  */
+ export function mapPost(row, currentUserId) {
+   const likesList = row.likes || [];
++  // ไลก์ที่ได้รับ "วันนี้" (ตั้งแต่เที่ยงคืนตามเวลาเครื่อง) ใช้จัดอันดับเมนูฮิตรายวัน
++  const startOfToday = new Date().setHours(0, 0, 0, 0);
++  const likesToday = likesList.filter(
++    (l) => l.created_at && new Date(l.created_at).getTime() >= startOfToday,
++  ).length;
+ 
+   return {
+     id: row.post_id,
+@@ -85,6 +90,7 @@ export function mapPost(row, currentUserId) {
+ 
+     mine: row.creator_id === currentUserId,
+     likes: likesList.length,
++    likesToday,
+     liked: likesList.some((l) => l.user_id === currentUserId),
+ 
+     comments: (row.comments || []).map((c) => ({
+@@ -100,19 +106,27 @@ export function mapPost(row, currentUserId) {
+  * ฟังก์ชันดึงโพสต์ทั้งหมด พร้อมดึงข้อมูลจากตารางที่เชื่อมกัน (Join)
+  */
+ export async function fetchPosts(currentUserId) {
+-  const { data, error } = await supabase
+-    .from("posts")
+-    .select(
+-      `
++  const query = (likeCols) =>
++    supabase
++      .from("posts")
++      .select(
++        `
+       *,
+       users ( username, avatar_url ),
+       recipe_ingredients ( ingredient_name, amount ),
+       recipe_steps ( step_number, instruction ),
+-      likes ( user_id ),
++      likes ( ${likeCols} ),
+       comments ( comment_id, content, user_id, users ( username ) )
+     `,
+-    )
+-    .order("created_at", { ascending: false });
++      )
++      .order("created_at", { ascending: false });
++
++  // ขอเวลาที่กดไลก์ด้วย (ใช้จัดอันดับรายวัน) ถ้าตาราง likes ยังไม่มีคอลัมน์ created_at
++  // ให้ถอยกลับไปแบบเดิม แอปจะยังใช้ได้ (เมนูฮิตรายวันจะว่างจนกว่าจะรัน SQL)
++  let { data, error } = await query("user_id, created_at");
++  if (error && /created_at/i.test(error.message || "")) {
++    ({ data, error } = await query("user_id"));
++  }
+ 
+   if (error) {
+     console.error("เกิดข้อผิดพลาดในการโหลดโพสต์:", error.message);
+diff --git a/screens/CreatorScreen.js b/screens/CreatorScreen.js
+index 8c4a912..0a5c350 100644
+--- a/screens/CreatorScreen.js
++++ b/screens/CreatorScreen.js
+@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+ import PostCard from '../components/PostCard';
+ import Avatar from '../components/Avatar';
++import StateView from '../components/StateView';
+ 
+ // หน้า Creator: โปรไฟล์ของ Creator + โพสต์ทั้งหมดของเขา
+ export default function CreatorScreen({
+@@ -15,6 +16,9 @@ export default function CreatorScreen({
+   favApi,
+   onToggleLike,
+   onAddComment,
++  status = 'success',
++  error = '',
++  onRetry,
+   onBack,
+ }) {
+   const sorted = [...posts].sort((a, b) => b.likes - a.likes);
+@@ -36,8 +40,10 @@ export default function CreatorScreen({
+       </View>
+ 
+       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+-        {!creator ? (
+-          <Text style={styles.empty}>ไม่พบ Creator คนนี้</Text>
++        {status !== 'success' ? (
++          <StateView status={status} error={error} onRetry={onRetry} />
++        ) : !creator ? (
++          <StateView empty emptyIcon="person-outline" emptyTitle="ไม่พบ Creator คนนี้" emptyHint="บัญชีนี้อาจถูกลบไปแล้ว" />
+         ) : (
+           <>
+             <View style={styles.profile}>
+@@ -78,10 +84,13 @@ export default function CreatorScreen({
+             </View>
+ 
+             <Text style={styles.section}>โพสต์ของ {creator.name}</Text>
+-            {sorted.length === 0 ? (
+-              <Text style={styles.empty}>ยังไม่มีโพสต์</Text>
+-            ) : (
+-              sorted.map((p) => (
++            <StateView
++              compact
++              empty={sorted.length === 0}
++              emptyIcon="albums-outline"
++              emptyTitle="ยังไม่มีโพสต์"
++            >
++              {sorted.map((p) => (
+                 <PostCard
+                   key={p.id}
+                   post={p}
+@@ -89,8 +98,8 @@ export default function CreatorScreen({
+                   onAddComment={onAddComment}
+                   favApi={favApi}
+                 />
+-              ))
+-            )}
++              ))}
++            </StateView>
+           </>
+         )}
+       </ScrollView>
+diff --git a/screens/FavoritesScreen.js b/screens/FavoritesScreen.js
+index ffcbaa3..265d206 100644
+--- a/screens/FavoritesScreen.js
++++ b/screens/FavoritesScreen.js
+@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+ import PostCard from '../components/PostCard';
++import StateView from '../components/StateView';
+ 
+ function CollectionChip({ id, label, group, onPress }) {
+   return (
+@@ -32,6 +33,9 @@ export default function FavoritesScreen({
+   onAddComment,
+   onBack,
+   onOpenCreator,
++  status = 'success',
++  error = '',
++  onRetry,
+   initialTab = 'fav',
+ }) {
+   const [tab, setTab] = useState(initialTab);
+@@ -95,6 +99,7 @@ export default function FavoritesScreen({
+       <ScrollView
+         contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+         keyboardShouldPersistTaps="handled">
++        <StateView status={status} error={error} onRetry={onRetry}>
+         {tab === 'fav' && (
+           <>
+             <ScrollView
+@@ -148,14 +153,14 @@ export default function FavoritesScreen({
+               </View>
+             )}
+ 
+-            {shown.length === 0 ? (
+-              <Text style={styles.empty}>
+-                {favPosts.length === 0
+-                  ? 'ยังไม่มีโพสต์ใน Favorite กดรูป bookmark ที่โพสต์เพื่อเก็บไว้ได้เลย'
+-                  : 'ยังไม่มีโพสต์ในกลุ่มนี้'}
+-              </Text>
+-            ) : (
+-              shown.map((p) => (
++            <StateView
++              compact
++              empty={shown.length === 0}
++              emptyIcon="bookmark-outline"
++              emptyTitle={favPosts.length === 0 ? 'ยังไม่มีโพสต์ใน Favorite' : 'ยังไม่มีโพสต์ในกลุ่มนี้'}
++              emptyHint={favPosts.length === 0 ? 'กดรูป bookmark ที่โพสต์เพื่อเก็บไว้ได้เลย' : ''}
++            >
++              {shown.map((p) => (
+                 <PostCard
+                   key={p.id}
+                   post={p}
+@@ -164,16 +169,19 @@ export default function FavoritesScreen({
+                   favApi={favApi}
+                   onOpenCreator={onOpenCreator}
+                 />
+-              ))
+-            )}
++              ))}
++            </StateView>
+           </>
+         )}
+ 
+-        {tab === 'liked' &&
+-          (likedPosts.length === 0 ? (
+-            <Text style={styles.empty}>ยังไม่ได้กดหัวใจโพสต์ไหนเลย</Text>
+-          ) : (
+-            likedPosts.map((p) => (
++        {tab === 'liked' && (
++          <StateView
++            compact
++            empty={likedPosts.length === 0}
++            emptyIcon="heart-outline"
++            emptyTitle="ยังไม่ได้กดหัวใจโพสต์ไหนเลย"
++          >
++            {likedPosts.map((p) => (
+               <PostCard
+                 key={p.id}
+                 post={p}
+@@ -182,8 +190,10 @@ export default function FavoritesScreen({
+                 favApi={favApi}
+                 onOpenCreator={onOpenCreator}
+               />
+-            ))
+-          ))}
++            ))}
++          </StateView>
++        )}
++        </StateView>
+       </ScrollView>
+     </SafeAreaView>
+   </ImageBackground>
+diff --git a/screens/GoalScreen.js b/screens/GoalScreen.js
+index 1566634..7eccd7a 100644
+--- a/screens/GoalScreen.js
++++ b/screens/GoalScreen.js
+@@ -4,12 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+ import { HEALTH_GOALS } from '../data/profileOptions';
++import StateView from '../components/StateView';
+ 
+ const PRESETS = [1500, 1800, 2000, 2200, 2500];
+ const MIN = 800;
+ const MAX = 5000;
+ 
+-export default function GoalScreen({ profile, eaten = 0, meals = [], onAddMeal, onRemoveMeal, onSave, onBack }) {
++export default function GoalScreen({ profile, eaten = 0, meals = [], mealsStatus = 'success', onRetryMeals, onAddMeal, onRemoveMeal, onSave, onBack }) {
+   const [mealName, setMealName] = useState('');
+   const [mealKcal, setMealKcal] = useState('');
+   const [mealBusy, setMealBusy] = useState(false);
+@@ -132,10 +133,16 @@ export default function GoalScreen({ profile, eaten = 0, meals = [], onAddMeal,
+ 
+         <View style={styles.card}>
+           <Text style={styles.cardLabel}>มื้อที่กินวันนี้</Text>
+-          {meals.length === 0 ? (
+-            <Text style={styles.hint}>ยังไม่มีการบันทึก กด "บันทึกว่ากินมื้อนี้" ในหน้าโพสต์ หรือเพิ่มเองด้านล่าง</Text>
+-          ) : (
+-            meals.map((m) => (
++          <StateView
++            compact
++            status={mealsStatus}
++            onRetry={onRetryMeals}
++            empty={meals.length === 0}
++            emptyIcon="restaurant-outline"
++            emptyTitle="วันนี้ยังไม่ได้บันทึกมื้อไหน"
++            emptyHint='กด "บันทึกว่ากินมื้อนี้" ในหน้าโพสต์ หรือเพิ่มเองด้านล่าง'
++          >
++            {meals.map((m) => (
+               <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
+                 <Text style={{ flex: 1, color: colors.text, fontSize: 14 }} numberOfLines={1}>{m.title}</Text>
+                 <Text style={{ color: colors.text, fontWeight: 'bold', marginRight: 10 }}>{m.kcal} kcal</Text>
+@@ -143,8 +150,8 @@ export default function GoalScreen({ profile, eaten = 0, meals = [], onAddMeal,
+                   <Ionicons name="trash-outline" size={18} color={colors.muted} />
+                 </TouchableOpacity>
+               </View>
+-            ))
+-          )}
++            ))}
++          </StateView>
+           <View style={{ flexDirection: 'row', marginTop: 10 }}>
+             <TextInput
+               style={[styles.mealInput, { flex: 1 }]}
+diff --git a/screens/HomeScreen.js b/screens/HomeScreen.js
+index cd500d5..a4cf35e 100644
+--- a/screens/HomeScreen.js
++++ b/screens/HomeScreen.js
+@@ -16,6 +16,7 @@ import PostCard from "../components/PostCard";
+ import { colors } from "../theme";
+ import { nutriText } from "../utils";
+ import { buildRecommendations } from "../data/recommend";
++import StateView from "../components/StateView";
+ 
+ // ---------- ส่วนหัว ----------
+ function Header({ name, avatar, avatarUrl, notifCount, onBell }) {
+@@ -163,7 +164,7 @@ function TopMenuCard({ item, rank, onPress, onToggleLike }) {
+         </TouchableOpacity>
+       </View>
+       <View style={styles.likePill}>
+-        <Text style={styles.likeText}>👍 {fmtLikes(item.likes)}</Text>
++        <Text style={styles.likeText}>👍 {fmtLikes(item.likesToday ?? item.likes)}</Text>
+       </View>
+       <Text style={styles.menuName} numberOfLines={1}>
+         {rank}. {item.title || item.caption}
+@@ -184,7 +185,15 @@ function RecommendCard({ post, ready, onPress, following, onToggleFollow }) {
+       onPress={onPress}
+     >
+       <View style={styles.recImg}>
+-        <Text style={{ fontSize: 44 }}>{post.emoji}</Text>
++        {post.media && post.media.type === "image" ? (
++          <Image
++            source={{ uri: post.media.uri }}
++            style={styles.recPhoto}
++            resizeMode="cover"
++          />
++        ) : (
++          <Text style={{ fontSize: 44 }}>{post.emoji}</Text>
++        )}
+         <TouchableOpacity
+           style={[styles.followBtn, following && styles.followBtnOn]}
+           onPress={() => onToggleFollow(post.creatorId)}
+@@ -226,6 +235,9 @@ export default function HomeScreen({
+   eaten = 0,
+   favs = {},
+   lastScan = null,
++  postsStatus = "success",
++  postsError = "",
++  onRetry,
+   unreadCount = 0,
+   onToggleLike,
+   onAddComment,
+@@ -244,10 +256,11 @@ export default function HomeScreen({
+   // ฟีดแสดงเฉพาะโพสต์ของคนอื่นที่เปิดให้ขึ้นฟีด
+   const feedPosts = posts.filter((p) => !p.mine && p.feed !== false);
+ 
+-  // 10 อันดับเมนูฮิต เรียงตามยอดไลก์ (เอา // ออก และดัก posts ว่างไว้กันแอปเด้ง)
+-  const topMenus = posts
+-    ? [...posts].sort((a, b) => b.likes - a.likes).slice(0, 10)
+-    : [];
++  // 10 อันดับเมนูฮิตรายวัน: เรียงตามจำนวนไลก์ที่ได้รับ "วันนี้" (ถ้าเท่ากันดูไลก์รวม)
++  const topMenus = (posts || [])
++    .filter((p) => (p.likesToday || 0) > 0)
++    .sort((a, b) => b.likesToday - a.likesToday || b.likes - a.likes)
++    .slice(0, 10);
+   // เมนูแนะนำจากข้อมูลจริง: creator ที่ติดตาม, โพสต์ที่ไลก์/บันทึก, วัตถุดิบที่สแกนล่าสุด
+   const recs = buildRecommendations({
+     posts,
+@@ -283,53 +296,67 @@ export default function HomeScreen({
+           />
+ 
+           <SectionHead title="🏆 10 อันดับเมนูฮิตรายวัน" />
+-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+-            {topMenus.map((m, i) => (
+-              <TopMenuCard
+-                key={m.post_id || m.id || i}
+-                item={m}
+-                rank={i + 1}
+-                onPress={() => onOpenPost(m.id)}
+-                onToggleLike={onToggleLike}
+-              />
+-            ))}
+-          </ScrollView>
++          <StateView
++            compact
++            status={postsStatus}
++            error={postsError}
++            onRetry={onRetry}
++            empty={topMenus.length === 0}
++            emptyIcon="trophy-outline"
++            emptyTitle="วันนี้ยังไม่มีเมนูที่ได้รับไลก์"
++            emptyHint="กดหัวใจเมนูที่ชอบ แล้วจะขึ้นอันดับที่นี่ (นับใหม่ทุกวัน)"
++          >
++            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
++              {topMenus.map((m, i) => (
++                <TopMenuCard
++                  key={m.post_id || m.id || i}
++                  item={m}
++                  rank={i + 1}
++                  onPress={() => onOpenPost(m.id)}
++                  onToggleLike={onToggleLike}
++                />
++              ))}
++            </ScrollView>
++          </StateView>
+ 
+           <SectionHead title="🍽️ เมนูแนะนำสำหรับคุณ" action="ดูทั้งหมด ›" />
+           <Text style={styles.sectionSub}>
+             อิงจาก Creator ที่ follow, โพสต์ที่ไลก์/บันทึก และวัตถุดิบที่สแกนล่าสุด
+           </Text>
+-          {recs.length === 0 && (
+-            <Text style={{ color: colors.muted, marginVertical: 12 }}>
+-              ยังไม่มีเมนูแนะนำ ลองติดตาม Creator หรือกดไลก์โพสต์ที่ชอบดูนะ
+-            </Text>
+-          )}
+-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+-            {recs.map((r) => (
+-              <RecommendCard
+-                key={r.postId}
+-                post={r.post}
+-                ready={r.ready}
+-                onPress={() => onOpenPost(r.postId)}
+-                following={!!following[r.post.creatorId]}
+-                onToggleFollow={onToggleFollow}
+-              />
+-            ))}
+-          </ScrollView>
++          <StateView
++            compact
++            status={postsStatus}
++            error={postsError}
++            onRetry={onRetry}
++            empty={recs.length === 0}
++            emptyTitle="ยังไม่มีเมนูแนะนำ"
++            emptyHint="ลองติดตาม Creator หรือกดไลก์โพสต์ที่ชอบดูนะ"
++          >
++            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
++              {recs.map((r) => (
++                <RecommendCard
++                  key={r.postId}
++                  post={r.post}
++                  ready={r.ready}
++                  onPress={() => onOpenPost(r.postId)}
++                  following={!!following[r.post.creatorId]}
++                  onToggleFollow={onToggleFollow}
++                />
++              ))}
++            </ScrollView>
++          </StateView>
+ 
+           <SectionHead title="👥 โพสต์จาก Creator" />
+-          {feedPosts.length === 0 ? (
+-            <Text
+-              style={{
+-                color: colors.muted,
+-                textAlign: "center",
+-                marginVertical: 16,
+-              }}
+-            >
+-              ยังไม่มีโพสต์
+-            </Text>
+-          ) : (
+-            feedPosts.map((p) => (
++          <StateView
++            status={postsStatus}
++            error={postsError}
++            onRetry={onRetry}
++            empty={feedPosts.length === 0}
++            emptyIcon="albums-outline"
++            emptyTitle="ยังไม่มีโพสต์"
++            emptyHint="เมื่อมี Creator โพสต์เมนูใหม่ จะขึ้นที่นี่"
++          >
++            {feedPosts.map((p) => (
+               <PostCard
+                 key={p.id}
+                 post={p}
+@@ -338,8 +365,8 @@ export default function HomeScreen({
+                 favApi={favApi}
+                 onOpenCreator={onOpenCreator}
+               />
+-            ))
+-          )}
++            ))}
++          </StateView>
+         </View>
+       </ScrollView>
+     </View>
+@@ -545,6 +572,7 @@ const styles = StyleSheet.create({
+     justifyContent: "center",
+     marginBottom: 8,
+   },
++  recPhoto: { width: "100%", height: "100%", borderRadius: 12 },
+   followBtn: {
+     position: "absolute",
+     top: 6,
+diff --git a/screens/MainScreen.js b/screens/MainScreen.js
+index 7facd29..ab4e58c 100644
+--- a/screens/MainScreen.js
++++ b/screens/MainScreen.js
+@@ -64,6 +64,7 @@ import PostDetailScreen from "./PostDetailScreen";
+ import ScanHistoryScreen from "./ScanHistoryScreen";
+ import OnboardingScreen from "./OnboardingScreen";
+ import ScanScreen from "./ScanScreen";
++import { combineStatus } from "../components/StateView";
+ 
+ // ค่าเริ่มต้นก่อนโหลดโปรไฟล์จริงจาก Supabase (ไม่ใช้ข้อมูลตัวอย่างปลอมอีกต่อไป)
+ const INITIAL_PROFILE = {
+@@ -86,6 +87,23 @@ export default function MainScreen({ onLogout }) {
+   const [profile, setProfile] = useState(INITIAL_PROFILE);
+   const [notifications, setNotifications] = useState([]);
+   const [scanHistory, setScanHistory] = useState([]);
++  // สถานะการโหลดของข้อมูลแต่ละส่วน: 'loading' | 'error' | 'success' (ว่างดูจากจำนวนรายการในแต่ละหน้า)
++  const [status, setStatus] = useState({
++    posts: "loading",
++    creators: "loading",
++    favs: "loading",
++    notifications: "loading",
++    scans: "loading",
++    searches: "loading",
++    meals: "loading",
++  });
++  const [loadError, setLoadError] = useState({}); // ข้อความ error ของแต่ละส่วน
++  const [reloadKey, setReloadKey] = useState(0); // เพิ่มค่าเพื่อโหลดทั้งหมดใหม่ (ปุ่มลองใหม่)
++  const markStatus = (key, value, message = "") => {
++    setStatus((prev) => (prev[key] === value ? prev : { ...prev, [key]: value }));
++    setLoadError((prev) => ({ ...prev, [key]: message }));
++  };
++  const retryLoad = () => setReloadKey((k) => k + 1);
+   const [searchHistory, setSearchHistory] = useState([]); // คำที่เคยค้นหา (search_history)
+   const [meals, setMeals] = useState([]); // มื้อที่กินวันนี้ (meal_logs)
+   const [userId, setUserId] = useState(null); // id ผู้ใช้ที่ล็อกอิน
+@@ -132,18 +150,22 @@ export default function MainScreen({ onLogout }) {
+         fetchSearchHistory(uid),
+       ]);
+       if (cancelled) return;
+-      if (sh.status === "fulfilled") setScanHistory(sh.value);
+-      else console.log("โหลดประวัติสแกนไม่สำเร็จ:", sh.reason?.message);
+-      if (sr.status === "fulfilled") setSearchHistory(sr.value);
+-      else console.log("โหลดประวัติค้นหาไม่สำเร็จ:", sr.reason?.message);
+-      if (ml.status === "fulfilled") setMeals(ml.value);
+-      else console.log("โหลดมื้ออาหารไม่สำเร็จ:", ml.reason?.message);
+-      if (cr.status === "fulfilled") setCreators(cr.value);
+-      else console.log("โหลดรายชื่อ creator ไม่สำเร็จ:", cr.reason?.message);
++      const track = (key, r, onOk, label) => {
++        if (r.status === "fulfilled") {
++          onOk(r.value);
++          markStatus(key, "success");
++        } else {
++          console.log(`โหลด${label}ไม่สำเร็จ:`, r.reason?.message);
++          markStatus(key, "error", r.reason?.message || "");
++        }
++      };
++      track("searches", sr, setSearchHistory, "ประวัติค้นหา");
++      track("meals", ml, setMeals, "มื้ออาหาร");
++      track("scans", sh, setScanHistory, "ประวัติสแกน");
++      track("creators", cr, setCreators, "รายชื่อ creator");
+       if (fo.status === "fulfilled") setFollows(fo.value);
+       else console.log("โหลดการติดตามไม่สำเร็จ:", fo.reason?.message);
+-      if (fa.status === "fulfilled") setFavs(fa.value);
+-      else console.log("โหลด Favorite ไม่สำเร็จ:", fa.reason?.message);
++      track("favs", fa, setFavs, "Favorite");
+       if (co.status === "fulfilled") {
+         if (co.value.length > 0) setCollections(co.value);
+         else {
+@@ -162,6 +184,10 @@ export default function MainScreen({ onLogout }) {
+     };
+ 
+     const loadData = async () => {
++      // ลองใหม่: ตั้งทุกส่วนกลับเป็น "กำลังโหลด" ก่อน
++      setStatus((prev) =>
++        Object.fromEntries(Object.keys(prev).map((k) => [k, "loading"])),
++      );
+       try {
+         // 1. ดึงข้อมูลผู้ใช้ที่ล็อกอินอยู่ปัจจุบันจาก Auth
+         const {
+@@ -189,14 +215,23 @@ export default function MainScreen({ onLogout }) {
+           }
+         }
+ 
++        // ไม่มีผู้ใช้ล็อกอิน = ไม่มีข้อมูลส่วนตัวให้โหลด ถือว่าเสร็จ (ว่าง)
++        if (!user && !cancelled) {
++          ["creators", "favs", "notifications", "scans", "searches", "meals"].forEach(
++            (k) => markStatus(k, "success"),
++          );
++        }
++
+         // 3. ดึงโพสต์ทั้งหมด
+         const list = await fetchPosts(user?.id);
+ 
+         if (!cancelled) {
+           setPosts(list);
++          markStatus("posts", "success");
+         }
+       } catch (error) {
+         console.log("โหลดข้อมูลไม่สำเร็จ:", error.message);
++        if (!cancelled) markStatus("posts", "error", error.message);
+       } finally {
+         if (!cancelled) setProfileLoaded(true);
+       }
+@@ -207,7 +242,7 @@ export default function MainScreen({ onLogout }) {
+     return () => {
+       cancelled = true;
+     };
+-  }, []);
++  }, [reloadKey]);
+   // ---------- โพสต์ ----------
+   const addPost = async (postData) => {
+     try {
+@@ -302,7 +337,12 @@ export default function MainScreen({ onLogout }) {
+     setPosts((prev) =>
+       prev.map((p) =>
+         p.id === id && p.liked !== liked
+-          ? { ...p, liked, likes: p.likes + (liked ? 1 : -1) }
++          ? {
++              ...p,
++              liked,
++              likes: p.likes + (liked ? 1 : -1),
++              likesToday: Math.max(0, (p.likesToday || 0) + (liked ? 1 : -1)),
++            }
+           : p,
+       ),
+     );
+@@ -536,6 +576,16 @@ export default function MainScreen({ onLogout }) {
+   };
+ 
+   // ---------- แจ้งเตือน ----------
++  const retryNotifications = () => {
++    if (!userId) return;
++    markStatus("notifications", "loading");
++    fetchNotifications(userId)
++      .then((data) => {
++        setNotifications(data);
++        markStatus("notifications", "success");
++      })
++      .catch((e) => markStatus("notifications", "error", e?.message || ""));
++  };
+   const unreadCount = notifications.filter((n) => !n.read).length;
+   const readAll = () => {
+     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+@@ -559,19 +609,23 @@ export default function MainScreen({ onLogout }) {
+   useEffect(() => {
+     if (!userId) return undefined;
+     let isMounted = true;
+-    fetchNotifications(userId)
+-      .then((data) => {
+-        if (isMounted) setNotifications(data);
+-      })
+-      .catch((e) => console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message));
+-
+-    const timer = setInterval(() => {
++    const load = () =>
+       fetchNotifications(userId)
+         .then((data) => {
+-          if (isMounted) setNotifications(data);
++          if (!isMounted) return;
++          setNotifications(data);
++          markStatus("notifications", "success");
+         })
+-        .catch((e) => console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message));
+-    }, 30000);
++        .catch((e) => {
++          console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message);
++          // ถ้าเคยโหลดสำเร็จแล้ว (รอบ 30 วินาที) ไม่ต้องเด้งหน้า error ทับข้อมูลเดิม
++          if (isMounted)
++            setStatus((prev) =>
++              prev.notifications === "success" ? prev : { ...prev, notifications: "error" },
++            );
++        });
++    load();
++    const timer = setInterval(load, 30000);
+ 
+     return () => {
+       isMounted = false;
+@@ -583,8 +637,14 @@ export default function MainScreen({ onLogout }) {
+   useEffect(() => {
+     if (activeTopName === "notifications" && userId) {
+       fetchNotifications(userId)
+-        .then(setNotifications)
+-        .catch((e) => console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message));
++        .then((data) => {
++          setNotifications(data);
++          markStatus("notifications", "success");
++        })
++        .catch((e) => {
++          console.log("โหลดแจ้งเตือนไม่สำเร็จ:", e?.message);
++          markStatus("notifications", "error", e?.message || "");
++        });
+     }
+   }, [activeTopName, userId]);
+ 
+@@ -657,6 +717,9 @@ export default function MainScreen({ onLogout }) {
+         return (
+           <NotificationsScreen
+             notifications={notifications}
++            status={status.notifications}
++            error={loadError.notifications}
++            onRetry={retryNotifications}
+             onOpen={openNotification}
+             onReadAll={readAll}
+             onBack={pop}
+@@ -680,6 +743,9 @@ export default function MainScreen({ onLogout }) {
+           <PostDetailScreen
+             post={viewPosts.find((p) => p.id === top.params.postId)}
+             onLogMeal={logMeal}
++            status={status.posts}
++            error={loadError.posts}
++            onRetry={retryLoad}
+             onToggleLike={toggleLike}
+             onAddComment={addComment}
+             favApi={favApi}
+@@ -703,6 +769,9 @@ export default function MainScreen({ onLogout }) {
+           <CreatorScreen
+             creator={creator}
+             posts={viewPosts.filter((p) => p.creatorId === cid && !p.mine)}
++            status={status.posts}
++            error={loadError.posts}
++            onRetry={retryLoad}
+             isFollowing={!!following[cid]}
+             onToggleFollow={toggleFollow}
+             favApi={favApi}
+@@ -719,6 +788,9 @@ export default function MainScreen({ onLogout }) {
+             key={top.name}
+             initialTab={top.name === "liked" ? "liked" : "fav"}
+             posts={viewPosts}
++            status={combineStatus(status.posts, status.favs)}
++            error={loadError.posts || loadError.favs}
++            onRetry={retryLoad}
+             favApi={favApi}
+             onToggleLike={toggleLike}
+             onAddComment={addComment}
+@@ -730,6 +802,9 @@ export default function MainScreen({ onLogout }) {
+         return (
+           <ScanHistoryScreen
+             history={scanHistory}
++            status={status.scans}
++            error={loadError.scans}
++            onRetry={retryLoad}
+             onDelete={deleteScan}
+             onBack={pop}
+           />
+@@ -738,6 +813,9 @@ export default function MainScreen({ onLogout }) {
+         return (
+           <MyPostsScreen
+             posts={myPosts}
++            status={status.posts}
++            error={loadError.posts}
++            onRetry={retryLoad}
+             favApi={favApi}
+             onToggleLike={toggleLike}
+             onAddComment={addComment}
+@@ -752,6 +830,8 @@ export default function MainScreen({ onLogout }) {
+             profile={profile}
+             eaten={eatenToday}
+             meals={todayMeals}
++            mealsStatus={status.meals}
++            onRetryMeals={retryLoad}
+             onAddMeal={logMeal}
+             onRemoveMeal={removeMeal}
+             onSave={saveGoal}
+@@ -814,6 +894,9 @@ export default function MainScreen({ onLogout }) {
+             eaten={eatenToday}
+             favs={favs}
+             lastScan={scanHistory[0] || null}
++            postsStatus={status.posts}
++            postsError={loadError.posts}
++            onRetry={retryLoad}
+             unreadCount={unreadCount}
+             onToggleLike={toggleLike}
+             onAddComment={addComment}
+@@ -835,6 +918,9 @@ export default function MainScreen({ onLogout }) {
+             onToggleLike={toggleLike}
+             onOpenPost={openPost}
+             onOpenCreator={openCreator}
++            postsStatus={status.posts}
++            creatorsStatus={status.creators}
++            onRetry={retryLoad}
+             searchHistory={searchHistory}
+             onSaveSearch={addSearch}
+             onRemoveSearch={removeSearch}
+diff --git a/screens/MyPostsScreen.js b/screens/MyPostsScreen.js
+index fa3df42..f75dc3e 100644
+--- a/screens/MyPostsScreen.js
++++ b/screens/MyPostsScreen.js
+@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+ import PostCard from '../components/PostCard';
++import StateView from '../components/StateView';
+ 
+ // โพสต์ 1 ใบ + ปุ่มลบ (กดยืนยัน 2 ครั้ง กันกดพลาด)
+ function MyPostItem({ post, onDelete, onToggleLike, onAddComment, favApi }) {
+@@ -44,7 +45,7 @@ function MyPostItem({ post, onDelete, onToggleLike, onAddComment, favApi }) {
+   );
+ }
+ 
+-export default function MyPostsScreen({ posts, favApi, onToggleLike, onAddComment, onDelete, onCreate, onBack }) {
++export default function MyPostsScreen({ posts, status = 'success', error = '', onRetry, favApi, onToggleLike, onAddComment, onDelete, onCreate, onBack }) {
+   const likes = posts.reduce((sum, p) => sum + p.likes, 0);
+   const comments = posts.reduce((sum, p) => sum + p.comments.length, 0);
+ 
+@@ -78,16 +79,18 @@ export default function MyPostsScreen({ posts, favApi, onToggleLike, onAddCommen
+           </View>
+         </View>
+ 
+-        {posts.length === 0 ? (
+-          <View style={{ alignItems: 'center', marginTop: 30 }}>
+-            <Text style={[styles.empty, { color: '#FFFFFF' }]}>ยังไม่มีโพสต์ของคุณ</Text>
+-            <TouchableOpacity style={styles.createBtn} onPress={onCreate}>
+-              <Ionicons name="add" size={18} color="#fff" />
+-              <Text style={styles.createText}>สร้างโพสต์แรก</Text>
+-            </TouchableOpacity>
+-          </View>
+-        ) : (
+-          posts.map((p) => (
++        <StateView
++          status={status}
++          error={error}
++          onRetry={onRetry}
++          empty={posts.length === 0}
++          emptyIcon="albums-outline"
++          emptyTitle="ยังไม่มีโพสต์ของคุณ"
++          emptyHint="แชร์เมนูแรกของคุณให้คนอื่นได้ลองทำ"
++          emptyAction={onCreate}
++          emptyActionLabel="สร้างโพสต์แรก"
++        >
++          {posts.map((p) => (
+             <MyPostItem
+               key={p.id}
+               post={p}
+@@ -96,8 +99,8 @@ export default function MyPostsScreen({ posts, favApi, onToggleLike, onAddCommen
+               onAddComment={onAddComment}
+               favApi={favApi}
+             />
+-          ))
+-        )}
++          ))}
++        </StateView>
+       </ScrollView>
+     </SafeAreaView>
+     </ImageBackground>
+diff --git a/screens/NotificationsScreen.js b/screens/NotificationsScreen.js
+index 3d33540..7c30cb0 100644
+--- a/screens/NotificationsScreen.js
++++ b/screens/NotificationsScreen.js
+@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+ import { ago } from '../utils';
++import StateView from '../components/StateView';
+ 
+ const ICONS = {
+   menu: 'restaurant-outline',
+@@ -14,7 +15,7 @@ const ICONS = {
+   system: 'flame-outline',
+ };
+ 
+-export default function NotificationsScreen({ notifications, onOpen, onReadAll, onBack }) {
++export default function NotificationsScreen({ notifications, status = 'success', error = '', onRetry, onOpen, onReadAll, onBack }) {
+   const unread = notifications.filter((n) => !n.read).length;
+ 
+   return (
+@@ -35,7 +36,15 @@ export default function NotificationsScreen({ notifications, onOpen, onReadAll,
+       </View>
+ 
+       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+-        {notifications.length === 0 && <Text style={styles.empty}>ยังไม่มีการแจ้งเตือน</Text>}
++        <StateView
++          status={status}
++          error={error}
++          onRetry={onRetry}
++          empty={notifications.length === 0}
++          emptyIcon="notifications-off-outline"
++          emptyTitle="ยังไม่มีการแจ้งเตือน"
++          emptyHint="เมื่อมีคนไลก์ คอมเมนต์ หรือติดตามคุณ จะขึ้นที่นี่"
++        >
+         {notifications.map((n) => (
+           <TouchableOpacity
+             key={n.id}
+@@ -53,6 +62,7 @@ export default function NotificationsScreen({ notifications, onOpen, onReadAll,
+             {!n.read && <View style={styles.dot} />}
+           </TouchableOpacity>
+         ))}
++        </StateView>
+       </ScrollView>
+     </SafeAreaView>
+     </ImageBackground>
+diff --git a/screens/PostDetailScreen.js b/screens/PostDetailScreen.js
+index 8586d48..9a56536 100644
+--- a/screens/PostDetailScreen.js
++++ b/screens/PostDetailScreen.js
+@@ -4,9 +4,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+ import PostCard from '../components/PostCard';
++import StateView from '../components/StateView';
+ 
+ // หน้ารายละเอียดโพสต์/เมนู: แสดงเป็นโพสต์ พร้อมกางส่วนผสมและวิธีทำให้เลย
+-export default function PostDetailScreen({ post, onLogMeal, onToggleLike, onAddComment, favApi, onOpenCreator, onBack }) {
++export default function PostDetailScreen({ post, status = 'success', error = '', onRetry, onLogMeal, onToggleLike, onAddComment, favApi, onOpenCreator, onBack }) {
+   const [logging, setLogging] = useState(false);
+   const [logMsg, setLogMsg] = useState('');
+   const kcal = post ? parseInt(String(post.kcal || '').replace(/[^0-9]/g, ''), 10) || 0 : 0;
+@@ -39,7 +40,10 @@ export default function PostDetailScreen({ post, onLogMeal, onToggleLike, onAddC
+       </View>
+ 
+       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+-        {post ? (
++        {status !== 'success' ? (
++          <StateView status={status} error={error} onRetry={onRetry} />
++        ) : null}
++        {status === 'success' && post ? (
+           <PostCard
+             post={post}
+             onToggleLike={onToggleLike}
+@@ -49,7 +53,7 @@ export default function PostDetailScreen({ post, onLogMeal, onToggleLike, onAddC
+             defaultOpen
+           />
+         ) : null}
+-        {post && onLogMeal ? (
++        {status === 'success' && post && onLogMeal ? (
+           <View style={{ marginTop: 4 }}>
+             <TouchableOpacity
+               style={[styles.logBtn, (kcal <= 0 || logging) && { opacity: 0.5 }]}
+@@ -69,8 +73,8 @@ export default function PostDetailScreen({ post, onLogMeal, onToggleLike, onAddC
+             {logMsg ? <Text style={styles.logMsg}>{logMsg}</Text> : null}
+           </View>
+         ) : null}
+-        {!post ? (
+-          <Text style={styles.empty}>ไม่พบโพสต์นี้แล้ว (อาจถูกลบไปแล้ว)</Text>
++        {status === 'success' && !post ? (
++          <StateView empty emptyIcon="trash-outline" emptyTitle="ไม่พบโพสต์นี้แล้ว" emptyHint="โพสต์อาจถูกลบไปแล้ว" emptyAction={onBack} emptyActionLabel="ย้อนกลับ" />
+         ) : null}
+       </ScrollView>
+     </SafeAreaView>
+diff --git a/screens/ScanHistoryScreen.js b/screens/ScanHistoryScreen.js
+index 7fd1847..d54edc1 100644
+--- a/screens/ScanHistoryScreen.js
++++ b/screens/ScanHistoryScreen.js
+@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ImageBackground }
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
++import StateView from '../components/StateView';
+ 
+ const pad = (n) => String(n).padStart(2, '0');
+ const fmt = (ms) => {
+@@ -10,7 +11,7 @@ const fmt = (ms) => {
+   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+ };
+ 
+-export default function ScanHistoryScreen({ history, onDelete, onBack }) {
++export default function ScanHistoryScreen({ history, status = 'success', error = '', onRetry, onDelete, onBack }) {
+   return (
+     <ImageBackground
+       source={require('../assets/bg_history.jpg')} 
+@@ -26,7 +27,15 @@ export default function ScanHistoryScreen({ history, onDelete, onBack }) {
+       </View>
+ 
+       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+-        {history.length === 0 && <Text style={styles.empty}>ยังไม่มีประวัติการสแกน</Text>}
++        <StateView
++          status={status}
++          error={error}
++          onRetry={onRetry}
++          empty={history.length === 0}
++          emptyIcon="scan-outline"
++          emptyTitle="ยังไม่มีประวัติการสแกน"
++          emptyHint="สแกนวัตถุดิบในตู้เย็น แล้วผลจะถูกเก็บไว้ที่นี่"
++        >
+         {history.map((h) => (
+           <View key={h.id} style={styles.card}>
+             <View style={styles.cardTop}>
+@@ -62,6 +71,7 @@ export default function ScanHistoryScreen({ history, onDelete, onBack }) {
+             )}
+           </View>
+         ))}
++        </StateView>
+       </ScrollView>
+     </SafeAreaView>
+     </ImageBackground>
+diff --git a/screens/SearchScreen.js b/screens/SearchScreen.js
+index 898dc80..32abf97 100644
+--- a/screens/SearchScreen.js
++++ b/screens/SearchScreen.js
+@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '../theme';
+ import Avatar from '../components/Avatar';
+ import { nutriText } from '../utils';
++import StateView from '../components/StateView';
+ 
+ // ---------- ข้อมูลจำลอง ----------
+ const CATEGORIES = [
+@@ -110,6 +111,9 @@ export default function SearchScreen({
+   onToggleLike,
+   onOpenPost,
+   onOpenCreator,
++  postsStatus = 'success',
++  creatorsStatus = 'success',
++  onRetry,
+   searchHistory = [],
+   onSaveSearch,
+   onRemoveSearch,
+@@ -217,7 +221,14 @@ export default function SearchScreen({
+         <View style={styles.sectionHead}>
+           <Text style={styles.sectionTitle}>👩‍🍳 Creator แนะนำ</Text>
+         </View>
+-        {creators.length > 0 ? (
++        <StateView
++          compact
++          status={creatorsStatus}
++          onRetry={onRetry}
++          empty={creators.length === 0}
++          emptyIcon="people-outline"
++          emptyTitle={q ? 'ไม่พบ creator ที่ค้นหา' : 'ยังไม่มี creator'}
++        >
+           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+             {creators.map((c) => (
+               <CreatorCard
+@@ -232,9 +243,7 @@ export default function SearchScreen({
+               />
+             ))}
+           </ScrollView>
+-        ) : (
+-          <Text style={styles.empty}>ไม่พบ creator ที่ค้นหา</Text>
+-        )}
++        </StateView>
+ 
+         {/* ตัวกรอง: อยากกินอะไรดี */}
+         <View style={styles.sectionHead}>
+@@ -276,8 +285,17 @@ export default function SearchScreen({
+           ) : null}
+         </View>
+ 
+-        {menus.length > 0 ? (
+-          menus.map((m, i) => (
++        <StateView
++          status={postsStatus}
++          onRetry={onRetry}
++          empty={menus.length === 0}
++          emptyIcon="search-outline"
++          emptyTitle="ไม่พบเมนูที่ตรงกับตัวกรอง"
++          emptyHint="ลองเปลี่ยนคำค้นหา หรือล้างตัวกรองดูนะ"
++          emptyAction={hasFilter ? clearAll : undefined}
++          emptyActionLabel="ล้างตัวกรอง"
++        >
++          {menus.map((m, i) => (
+             <MenuRow
+               key={m.id}
+               item={m}
+@@ -288,12 +306,8 @@ export default function SearchScreen({
+               }}
+               onToggleLike={onToggleLike}
+             />
+-          ))
+-        ) : (
+-          <Text style={styles.empty}>
+-            ไม่พบเมนูที่ตรงกับตัวกรอง ลองเปลี่ยนหรือล้างตัวกรองดูครับ
+-          </Text>
+-        )}
++          ))}
++        </StateView>
+         </ScrollView>
+       </SafeAreaView>
+     </ImageBackground>
+-- 
+2.43.0
+
